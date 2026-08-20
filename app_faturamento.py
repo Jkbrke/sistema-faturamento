@@ -10,6 +10,29 @@ import gspread
 # --- Configuração da Página ---
 st.set_page_config(page_title="Portal de Faturamento", page_icon="📊", layout="wide")
 
+# ==========================================================
+# TELA DE LOGIN (SENHA DA EQUIPE)
+# ==========================================================
+SENHA_CORRETA = "franquias2026" # <-- VOCÊ PODE MUDAR A SENHA AQUI
+
+if "logado" not in st.session_state:
+    st.session_state.logado = False
+
+if not st.session_state.logado:
+    st.title("🔒 Acesso Restrito")
+    senha_digitada = st.text_input("Digite a senha de acesso da equipe:", type="password")
+    if st.button("Entrar"):
+        if senha_digitada == SENHA_CORRETA:
+            st.session_state.logado = True
+            st.rerun()
+        else:
+            st.error("Senha incorreta!")
+    st.stop() # Trava o resto do site se não logar
+
+# ==========================================================
+# RESTO DO SISTEMA (SÓ RODA SE A SENHA ESTIVER CERTA)
+# ==========================================================
+
 ARQUIVO_BACKUP = "backup_web.json"
 
 # --- Configurações das Redes ---
@@ -49,17 +72,20 @@ if "lista_lojas" not in st.session_state: st.session_state.lista_lojas = []
 if "template_bytes" not in st.session_state: st.session_state.template_bytes = None
 if "rede_atual" not in st.session_state: st.session_state.rede_atual = "La Brasa Burger"
 
-# --- Funções de Nuvem (Google Sheets) ---
+# --- Funções de Nuvem (Google Sheets via Secrets) ---
 def ligar_google_sheets():
     try:
-        gc = gspread.service_account(filename="credenciais.json")
+        # Agora ele lê do cofre do Streamlit em vez do arquivo!
+        cred_dict = json.loads(st.secrets["google_credentials"])
+        gc = gspread.service_account_from_dict(cred_dict)
         return gc.open("Base_Dados_Franquias")
     except Exception as e:
+        st.error(f"Erro ao conectar na nuvem: {e}")
         return None
 
 def enviar_para_nuvem(df, rede):
     sh = ligar_google_sheets()
-    if not sh: return False, "Falha ao ligar ao Google Sheets. Verifique o arquivo credenciais.json e as permissões de compartilhamento."
+    if not sh: return False, "Falha ao ligar ao Google Sheets."
     
     nome_aba = "Historico_La_Brasa" if rede == "La Brasa Burger" else "Historico_La_Fruta"
     try:
@@ -200,7 +226,6 @@ def extrair_dados_com_openpyxl(file_bytes, rede):
         if "BUSCA" in colunas_map and linha_cabecalho != -1:
             idx_busca = colunas_map["BUSCA"]
             
-            # TRUQUE LA FRUTA: Caçar a coluna de Pedidos ao lado do Faturamento
             if rede == "La Fruta Açaí":
                 novas_cols = {}
                 for k_map, col_idx in colunas_map.items():
@@ -289,6 +314,11 @@ if uploaded_file is not None:
 st.sidebar.markdown("---")
 if st.sidebar.button("📂 Restaurar Backup Local"):
     carregar_backup_local()
+    st.rerun()
+
+st.sidebar.markdown("---")
+if st.sidebar.button("Sair (Bloquear Tela)"):
+    st.session_state.logado = False
     st.rerun()
 
 # --- ÁREA PRINCIPAL ---
@@ -399,8 +429,6 @@ with tab1:
                         if inputs_99["integra"]:
                             desc_fat += dados_loja["faturamento_99"]; desc_ped += dados_loja["pedidos_99"]
 
-                    dados_loja["Pedidos Sistema Bruto"] = ped_sis_bruto
-                    dados_loja["Faturamento Sistema Bruto"] = fat_sis_bruto
                     dados_loja["Pedidos Sistema"] = max(0, ped_sis_bruto - desc_ped)
                     dados_loja["Faturamento Sistema"] = max(0.0, fat_sis_bruto - desc_fat)
 
@@ -467,7 +495,6 @@ with tab1:
                         if "BUSCA" in colunas_map and linha_cabecalho != -1:
                             idx_busca = colunas_map["BUSCA"]
                             
-                            # Injeta colunas de pedidos do La Fruta no Mapeamento
                             if st.session_state.rede_atual == "La Fruta Açaí":
                                 novas_cols = {}
                                 for k_map, col_idx in colunas_map.items():
@@ -498,70 +525,65 @@ with tab1:
                     st.download_button("📥 Baixar Excel Atualizado", data=output.getvalue(), file_name=f"Faturamento_{st.session_state.rede_atual}.xlsx")
 
 # ==============================================================================
-# TAB 2: BASE DE DADOS / HISTÓRICO NA NUVEM COM FILTRO DE MÊS E PEDIDOS
+# TAB 2: BASE DE DADOS / HISTÓRICO NA NUVEM (CARREGAMENTO AUTOMÁTICO)
 # ==============================================================================
 with tab2:
     st.header("☁️ Dados Consolidados do Google Sheets")
-    st.write("Abaixo estão os dados reais gravados na nuvem (Faturamentos e Pedidos). Filtre por mês/ano para visualizar os relatórios separadamente.")
+    st.write("Abaixo estão os dados reais gravados na nuvem. Os dados são carregados automaticamente assim que entra na página.")
     
     col_btn, _ = st.columns([1, 2])
     with col_btn:
-        btn_carregar_nuvem = st.button("🔄 Carregar/Atualizar Dados da Nuvem")
+        if st.button("🔄 Forçar Recarregamento da Nuvem"):
+            if "df_nuvem_cache" in st.session_state:
+                del st.session_state["df_nuvem_cache"]
+            st.rerun()
         
-    if btn_carregar_nuvem or "df_nuvem_cache" in st.session_state:
-        if btn_carregar_nuvem or "df_nuvem_cache" not in st.session_state:
+    # CARREGAMENTO AUTOMÁTICO: Se ainda não tiver carregado nesta sessão, busca sozinho do Google Sheets
+    if "df_nuvem_cache" not in st.session_state:
+        with st.spinner("A conectar e carregar dados do Google Sheets..."):
             st.session_state.df_nuvem_cache = carregar_dados_nuvem(st.session_state.rede_atual)
             
-        df_nuvem = st.session_state.df_nuvem_cache
+    df_nuvem = st.session_state.df_nuvem_cache
+    
+    if not df_nuvem.empty:
+        col_mes = None
+        for c in ["Mês Referência", "Mês/Ano", "Mês", "Período"]:
+            if c in df_nuvem.columns:
+                col_mes = c
+                break
         
-        if not df_nuvem.empty:
-            col_mes = None
-            for c in ["Mês Referência", "Mês/Ano", "Mês", "Período"]:
-                if c in df_nuvem.columns:
-                    col_mes = c
-                    break
-            
-            if col_mes:
-                meses_unicos = [str(m) for m in sorted(df_nuvem[col_mes].unique()) if str(m).strip() != ""]
-                lista_opcoes_mes = ["Todos os Meses"] + meses_unicos
-                
-                mes_selecionado = st.selectbox("🗓️ Filtrar por Mês/Ano:", lista_opcoes_mes)
-                
-                if mes_selecionado != "Todos os Meses":
-                    df_exibir = df_nuvem[df_nuvem[col_mes].astype(str) == mes_selecionado].copy()
-                else:
-                    df_exibir = df_nuvem.copy()
+        if col_mes:
+            meses_unicos = [str(m) for m in sorted(df_nuvem[col_mes].unique()) if str(m).strip() != ""]
+            lista_opcoes_mes = ["Todos os Meses"] + meses_unicos
+            mes_selecionado = st.selectbox("🗓️ Filtrar por Mês/Ano:", lista_opcoes_mes)
+            if mes_selecionado != "Todos os Meses":
+                df_exibir = df_nuvem[df_nuvem[col_mes].astype(str) == mes_selecionado].copy()
             else:
                 df_exibir = df_nuvem.copy()
-                
-            df_visual = df_exibir.copy()
-            for col in df_visual.columns:
-                if "Faturamento" in col or "Royalties" in col:
-                    df_visual[col] = pd.to_numeric(df_visual[col], errors='coerce').apply(
-                        lambda x: f"R$ {x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if pd.notnull(x) else ""
-                    )
-                elif "Pedidos" in col:
-                    df_visual[col] = pd.to_numeric(df_visual[col], errors='coerce').apply(
-                        lambda x: f"{int(x)}" if pd.notnull(x) else ""
-                    )
-                
-            st.dataframe(df_visual, use_container_width=True)
-            st.success(f"{len(df_exibir)} registros exibidos (de um total de {len(df_nuvem)} na nuvem).")
-            
-            csv_data = df_exibir.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                "📥 Baixar Tabela Filtrada (CSV)",
-                data=csv_data,
-                file_name=f"faturamento_{st.session_state.rede_atual}_filtrado.csv",
-                mime="text/csv"
-            )
         else:
-            st.info("Ainda não existem registros gravados no Google Sheets para esta rede.")
+            df_exibir = df_nuvem.copy()
+            
+        df_visual = df_exibir.copy()
+        for col in df_visual.columns:
+            if "Faturamento" in col or "Royalties" in col:
+                df_visual[col] = pd.to_numeric(df_visual[col], errors='coerce').apply(
+                    lambda x: f"R$ {x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if pd.notnull(x) else ""
+                )
+            elif "Pedidos" in col:
+                df_visual[col] = pd.to_numeric(df_visual[col], errors='coerce').apply(
+                    lambda x: f"{int(x)}" if pd.notnull(x) else ""
+                )
+            
+        st.dataframe(df_visual, use_container_width=True)
+        st.success(f"{len(df_exibir)} registros exibidos (de um total de {len(df_nuvem)} na nuvem).")
+        
+        csv_data = df_exibir.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Baixar Tabela Filtrada (CSV)", data=csv_data, file_name=f"faturamento_{st.session_state.rede_atual}_filtrado.csv", mime="text/csv")
+    else:
+        st.info("Ainda não existem registros gravados no Google Sheets para esta rede ou a ligação falhou.")
 
     st.markdown("---")
     st.header("📚 Construir Histórico de Meses Anteriores em Lote")
-    st.write("Escreva o **Mês/Ano de Referência** na barra lateral (ex: `07/2026`) e arraste os arquivos Excel antigos abaixo para inseri-los no banco de dados da nuvem:")
-    
     arquivos_hist = st.file_uploader("Carregue as planilhas antigas", type=["xlsx"], accept_multiple_files=True)
     if st.button("☁️ Enviar Lote de Histórico para a Nuvem"):
         if not mes_ref:
@@ -578,16 +600,13 @@ with tab2:
                         for k, v in d.items():
                             if ("Faturamento" in k or "Pedidos" in k or "Royalties" in k) and isinstance(v, (int, float)):
                                 linha[k] = v
-                                if k.startswith("Faturamento ") and "Sistema" not in k and "Bruto" not in k:
-                                    tot_fat += v
-                                if k.startswith("Pedidos ") and "Sistema" not in k and "Bruto" not in k:
-                                    tot_ped += v
+                                if k.startswith("Faturamento ") and "Sistema" not in k and "Bruto" not in k: tot_fat += v
+                                if k.startswith("Pedidos ") and "Sistema" not in k and "Bruto" not in k: tot_ped += v
                         
                         tot_fat += d.get("Faturamento Sistema", 0.0)
                         tot_ped += d.get("Pedidos Sistema", 0)
                         linha["Faturamento Total Mês"] = tot_fat
                         linha["Pedidos Total Mês"] = tot_ped
-                        
                         if tot_fat > 0 or tot_ped > 0: linhas_hist.append(linha)
             
             if linhas_hist:
@@ -595,8 +614,7 @@ with tab2:
                 sucesso, msg = enviar_para_nuvem(df_hist_total, st.session_state.rede_atual)
                 if sucesso:
                     st.success("Histórico processado e enviado com sucesso para a nuvem!")
-                    if "df_nuvem_cache" in st.session_state:
-                        del st.session_state["df_nuvem_cache"] # Reseta cache para recarregar
+                    if "df_nuvem_cache" in st.session_state: del st.session_state["df_nuvem_cache"]
                     st.rerun()
                 else:
                     st.error(msg)
