@@ -11,16 +11,16 @@ import gspread
 st.set_page_config(page_title="Portal de Faturamento", page_icon="📊", layout="wide")
 
 # ==========================================================
-# ECRÃ DE LOGIN (SENHA DA EQUIPA)
+# ECRÃ DE LOGIN (SENHA DA EQUIPE)
 # ==========================================================
-SENHA_CORRETA = "franquias2026" # <-- PODE MUDAR A SENHA AQUI SE QUISER
+SENHA_CORRETA = "franquias2026"
 
 if "logado" not in st.session_state:
     st.session_state.logado = False
 
 if not st.session_state.logado:
     st.title("🔒 Acesso Restrito")
-    senha_digitada = st.text_input("Digite a senha de acesso da equipa:", type="password")
+    senha_digitada = st.text_input("Digite a senha de acesso da equipe:", type="password")
     if st.button("Entrar"):
         if senha_digitada == SENHA_CORRETA:
             st.session_state.logado = True
@@ -30,7 +30,7 @@ if not st.session_state.logado:
     st.stop() # Bloqueia o resto do site se não iniciar sessão
 
 # ==========================================================
-# RESTO DO SISTEMA (SÓ CORRE SE A SENHA ESTIVER CORRETA)
+# RESTO DO SISTEMA (SÓ RODA SE A SENHA ESTIVER CORRETA)
 # ==========================================================
 
 ARQUIVO_BACKUP = "backup_web.json"
@@ -76,11 +76,14 @@ if "rede_atual" not in st.session_state: st.session_state.rede_atual = "La Brasa
 def ligar_google_sheets():
     try:
         cred = st.secrets["google_credentials"]
-        # Se o Streamlit leu como texto, converte; se já for dicionário, usa direto
         if isinstance(cred, str):
             cred_dict = json.loads(cred)
         else:
             cred_dict = dict(cred)
+            
+        # A MÁGICA QUE CONSERTA A CHAVE (Força a leitura do "Enter" correto)
+        if "private_key" in cred_dict:
+            cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
             
         gc = gspread.service_account_from_dict(cred_dict)
         return gc.open("Base_Dados_Franquias")
@@ -164,11 +167,11 @@ def carregar_backup_local():
             st.session_state.lista_lojas = backup.get("lista_lojas", [])
             st.session_state.status_lojas = backup.get("status_lojas", {})
             st.session_state.dados_salvos = backup.get("dados_salvos", {})
-            st.success("📂 Progresso local recuperado!")
+            st.success("📂 Progresso recuperado com sucesso!")
         except Exception as e:
             st.error(f"Erro ao ler backup: {e}")
     else:
-        st.warning("Nenhum ficheiro de backup encontrado.")
+        st.warning("Nenhum arquivo de backup encontrado.")
 
 def extrair_dados_com_openpyxl(file_bytes, rede):
     wb = openpyxl.load_workbook(BytesIO(file_bytes), data_only=True)
@@ -308,7 +311,7 @@ if uploaded_file is not None:
         if encontrou: break
 
     if st.sidebar.button("📥 Importar Dados desta Planilha"):
-        with st.spinner("A ler valores do Excel..."):
+        with st.spinner("Lendo valores do Excel..."):
             dados_lidos = extrair_dados_com_openpyxl(st.session_state.template_bytes, st.session_state.rede_atual)
             for loja, d in dados_lidos.items():
                 loja_match = next((l for l in st.session_state.lista_lojas if l.lower() == loja.lower()), None)
@@ -325,7 +328,7 @@ if st.sidebar.button("📂 Restaurar Backup Local"):
     st.rerun()
 
 st.sidebar.markdown("---")
-if st.sidebar.button("Sair (Bloquear Ecrã)"):
+if st.sidebar.button("Sair (Bloquear Tela)"):
     st.session_state.logado = False
     st.rerun()
 
@@ -460,7 +463,7 @@ with tab1:
         if st.button("🚀 Gerar e Baixar Excel Atualizado"):
             if not st.session_state.dados_salvos: st.warning("Nenhuma loja preenchida.")
             else:
-                with st.spinner("A gerar ficheiro Excel..."):
+                with st.spinner("Gerando arquivo Excel..."):
                     wb = openpyxl.load_workbook(BytesIO(st.session_state.template_bytes))
                     col_busca = REDES_CONFIG[st.session_state.rede_atual]["col_busca"]
 
@@ -532,99 +535,99 @@ with tab1:
                     wb.save(output)
                     st.download_button("📥 Baixar Excel Atualizado", data=output.getvalue(), file_name=f"Faturamento_{st.session_state.rede_atual}.xlsx")
 
-    # ==============================================================================
-    # TAB 2: BASE DE DADOS / HISTÓRICO NA NUVEM (CARREGAMENTO AUTOMÁTICO)
-    # ==============================================================================
-    with tab2:
-        st.header("☁️ Dados Consolidados do Google Sheets")
-        st.write("Abaixo estão os dados reais gravados na nuvem. Os dados são carregados automaticamente assim que entra na página.")
+# ==============================================================================
+# TAB 2: BASE DE DADOS / HISTÓRICO NA NUVEM (CARREGAMENTO AUTOMÁTICO)
+# ==============================================================================
+with tab2:
+    st.header("☁️ Dados Consolidados do Google Sheets")
+    st.write("Abaixo estão os dados reais gravados na nuvem. Os dados são carregados automaticamente assim que você entra na aba.")
+    
+    col_btn, _ = st.columns([1, 2])
+    with col_btn:
+        if st.button("🔄 Forçar Recarregamento da Nuvem"):
+            if "df_nuvem_cache" in st.session_state:
+                del st.session_state["df_nuvem_cache"]
+            st.rerun()
         
-        col_btn, _ = st.columns([1, 2])
-        with col_btn:
-            if st.button("🔄 Forçar Recarregamento da Nuvem"):
-                if "df_nuvem_cache" in st.session_state:
-                    del st.session_state["df_nuvem_cache"]
-                st.rerun()
+    # CARREGAMENTO AUTOMÁTICO: Se ainda não tiver carregado, busca sozinho do Google Sheets
+    if "df_nuvem_cache" not in st.session_state:
+        with st.spinner("Conectando e carregando dados da nuvem..."):
+            st.session_state.df_nuvem_cache = carregar_dados_nuvem(st.session_state.rede_atual)
             
-        # CARREGAMENTO AUTOMÁTICO: Se ainda não tiver carregado nesta sessão, busca sozinho do Google Sheets
-        if "df_nuvem_cache" not in st.session_state:
-            with st.spinner("A conectar e carregar dados do Google Sheets..."):
-                st.session_state.df_nuvem_cache = carregar_dados_nuvem(st.session_state.rede_atual)
-                
-        df_nuvem = st.session_state.df_nuvem_cache
+    df_nuvem = st.session_state.df_nuvem_cache
+    
+    if not df_nuvem.empty:
+        col_mes = None
+        for c in ["Mês Referência", "Mês/Ano", "Mês", "Período"]:
+            if c in df_nuvem.columns:
+                col_mes = c
+                break
         
-        if not df_nuvem.empty:
-            col_mes = None
-            for c in ["Mês Referência", "Mês/Ano", "Mês", "Período"]:
-                if c in df_nuvem.columns:
-                    col_mes = c
-                    break
-            
-            if col_mes:
-                meses_unicos = [str(m) for m in sorted(df_nuvem[col_mes].unique()) if str(m).strip() != ""]
-                lista_opcoes_mes = ["Todos os Meses"] + meses_unicos
-                mes_selecionado = st.selectbox("🗓️ Filtrar por Mês/Ano:", lista_opcoes_mes)
-                if mes_selecionado != "Todos os Meses":
-                    df_exibir = df_nuvem[df_nuvem[col_mes].astype(str) == mes_selecionado].copy()
-                else:
-                    df_exibir = df_nuvem.copy()
+        if col_mes:
+            meses_unicos = [str(m) for m in sorted(df_nuvem[col_mes].unique()) if str(m).strip() != ""]
+            lista_opcoes_mes = ["Todos os Meses"] + meses_unicos
+            mes_selecionado = st.selectbox("🗓️ Filtrar por Mês/Ano:", lista_opcoes_mes)
+            if mes_selecionado != "Todos os Meses":
+                df_exibir = df_nuvem[df_nuvem[col_mes].astype(str) == mes_selecionado].copy()
             else:
                 df_exibir = df_nuvem.copy()
-                
-            df_visual = df_exibir.copy()
-            for col in df_visual.columns:
-                if "Faturamento" in col or "Royalties" in col:
-                    df_visual[col] = pd.to_numeric(df_visual[col], errors='coerce').apply(
-                        lambda x: f"R$ {x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if pd.notnull(x) else ""
-                    )
-                elif "Pedidos" in col:
-                    df_visual[col] = pd.to_numeric(df_visual[col], errors='coerce').apply(
-                        lambda x: f"{int(x)}" if pd.notnull(x) else ""
-                    )
-                
-            st.dataframe(df_visual, use_container_width=True)
-            st.success(f"{len(df_exibir)} registos exibidos (de um total de {len(df_nuvem)} na nuvem).")
-            
-            csv_data = df_exibir.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Baixar Tabela Filtrada (CSV)", data=csv_data, file_name=f"faturamento_{st.session_state.rede_atual}_filtrado.csv", mime="text/csv")
         else:
-            st.info("Ainda não existem registos gravados no Google Sheets para esta rede ou a ligação falhou.")
+            df_exibir = df_nuvem.copy()
+            
+        df_visual = df_exibir.copy()
+        for col in df_visual.columns:
+            if "Faturamento" in col or "Royalties" in col:
+                df_visual[col] = pd.to_numeric(df_visual[col], errors='coerce').apply(
+                    lambda x: f"R$ {x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if pd.notnull(x) else ""
+                )
+            elif "Pedidos" in col:
+                df_visual[col] = pd.to_numeric(df_visual[col], errors='coerce').apply(
+                    lambda x: f"{int(x)}" if pd.notnull(x) else ""
+                )
+            
+        st.dataframe(df_visual, use_container_width=True)
+        st.success(f"{len(df_exibir)} registros exibidos (de um total de {len(df_nuvem)} na nuvem).")
+        
+        csv_data = df_exibir.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Baixar Tabela Filtrada (CSV)", data=csv_data, file_name=f"faturamento_{st.session_state.rede_atual}_filtrado.csv", mime="text/csv")
+    else:
+        st.info("Ainda não existem registros gravados no Google Sheets para esta rede ou a ligação falhou.")
 
-        st.markdown("---")
-        st.header("📚 Construir Histórico de Meses Anteriores em Lote")
-        arquivos_hist = st.file_uploader("Carregue as planilhas antigas", type=["xlsx"], accept_multiple_files=True)
-        if st.button("☁️ Enviar Lote de Histórico para a Nuvem"):
-            if not mes_ref:
-                st.error("Por favor, preencha o campo 'Mês/Ano de Referência' na barra lateral antes de enviar.")
-            elif arquivos_hist:
-                linhas_hist = []
-                with st.spinner("A ler planilhas e a gravar no Google Sheets..."):
-                    for arq in arquivos_hist:
-                        dados_arq = extrair_dados_com_openpyxl(arq.getvalue(), st.session_state.rede_atual)
-                        for loja, d in dados_arq.items():
-                            linha = {"Mês Referência": mes_ref, "Arquivo Origem": arq.name, "Franquia": loja, "Status": "Histórico"}
-                            tot_fat = 0.0
-                            tot_ped = 0
-                            for k, v in d.items():
-                                if ("Faturamento" in k or "Pedidos" in k or "Royalties" in k) and isinstance(v, (int, float)):
-                                    linha[k] = v
-                                    if k.startswith("Faturamento ") and "Sistema" not in k and "Bruto" not in k: tot_fat += v
-                                    if k.startswith("Pedidos ") and "Sistema" not in k and "Bruto" not in k: tot_ped += v
-                            
-                            tot_fat += d.get("Faturamento Sistema", 0.0)
-                            tot_ped += d.get("Pedidos Sistema", 0)
-                            linha["Faturamento Total Mês"] = tot_fat
-                            linha["Pedidos Total Mês"] = tot_ped
-                            if tot_fat > 0 or tot_ped > 0: linhas_hist.append(linha)
-                
-                if linhas_hist:
-                    df_hist_total = pd.DataFrame(linhas_hist)
-                    sucesso, msg = enviar_para_nuvem(df_hist_total, st.session_state.rede_atual)
-                    if sucesso:
-                        st.success("Histórico processado e enviado com sucesso para a nuvem!")
-                        if "df_nuvem_cache" in st.session_state: del st.session_state["df_nuvem_cache"]
-                        st.rerun()
-                    else:
-                        st.error(msg)
-            else:
-                st.warning("Selecione pelo menos um ficheiro Excel antigo.")
+    st.markdown("---")
+    st.header("📚 Construir Histórico de Meses Anteriores em Lote")
+    arquivos_hist = st.file_uploader("Carregue as planilhas antigas", type=["xlsx"], accept_multiple_files=True)
+    if st.button("☁️ Enviar Lote de Histórico para a Nuvem"):
+        if not mes_ref:
+            st.error("Por favor, preencha o campo 'Mês/Ano de Referência' na barra lateral antes de enviar.")
+        elif arquivos_hist:
+            linhas_hist = []
+            with st.spinner("Lendo planilhas e gravando no Google Sheets..."):
+                for arq in arquivos_hist:
+                    dados_arq = extrair_dados_com_openpyxl(arq.getvalue(), st.session_state.rede_atual)
+                    for loja, d in dados_arq.items():
+                        linha = {"Mês Referência": mes_ref, "Arquivo Origem": arq.name, "Franquia": loja, "Status": "Histórico"}
+                        tot_fat = 0.0
+                        tot_ped = 0
+                        for k, v in d.items():
+                            if ("Faturamento" in k or "Pedidos" in k or "Royalties" in k) and isinstance(v, (int, float)):
+                                linha[k] = v
+                                if k.startswith("Faturamento ") and "Sistema" not in k and "Bruto" not in k: tot_fat += v
+                                if k.startswith("Pedidos ") and "Sistema" not in k and "Bruto" not in k: tot_ped += v
+                        
+                        tot_fat += d.get("Faturamento Sistema", 0.0)
+                        tot_ped += d.get("Pedidos Sistema", 0)
+                        linha["Faturamento Total Mês"] = tot_fat
+                        linha["Pedidos Total Mês"] = tot_ped
+                        if tot_fat > 0 or tot_ped > 0: linhas_hist.append(linha)
+            
+            if linhas_hist:
+                df_hist_total = pd.DataFrame(linhas_hist)
+                sucesso, msg = enviar_para_nuvem(df_hist_total, st.session_state.rede_atual)
+                if sucesso:
+                    st.success("Histórico processado e enviado com sucesso para a nuvem!")
+                    if "df_nuvem_cache" in st.session_state: del st.session_state["df_nuvem_cache"]
+                    st.rerun()
+                else:
+                    st.error(msg)
+        else:
+            st.warning("Selecione pelo menos um arquivo Excel antigo.")
