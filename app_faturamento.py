@@ -73,18 +73,13 @@ if "template_bytes" not in st.session_state: st.session_state.template_bytes = N
 if "rede_atual" not in st.session_state: st.session_state.rede_atual = "La Brasa Burger"
 
 # --- Funções de Nuvem (Google Sheets via Secrets Corrigido) ---
+# --- Funções de Nuvem (Google Sheets via Secrets Corrigido) ---
 def ligar_google_sheets():
     try:
-        cred = st.secrets["google_credentials"]
-        if isinstance(cred, str):
-            cred_dict = json.loads(cred)
-        else:
-            cred_dict = dict(cred)
-            
-        # A MÁGICA QUE CONSERTA A CHAVE (Força a leitura do "Enter" correto)
-        if "private_key" in cred_dict:
-            cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
-            
+        # Puxa diretamente como dicionário (forma nativa do Streamlit)
+        cred_dict = dict(st.secrets["google_credentials"])
+        
+        # Conecta ao Google
         gc = gspread.service_account_from_dict(cred_dict)
         return gc.open("Base_Dados_Franquias")
     except Exception as e:
