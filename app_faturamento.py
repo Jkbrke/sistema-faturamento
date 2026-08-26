@@ -266,12 +266,13 @@ def extrair_dados_com_openpyxl(file_bytes, rede):
                 loja_excel = str(celula).strip()
                 loja_lower = loja_excel.lower()
                 
-                # 🛑 NOVO FILTRO GLOBAL: Ignora as linhas se o nome contiver essas palavras
+                # 🛑 NOVO FILTRO GLOBAL: Ignora marcas virtuais e sujeiras do Excel
                 if any(ignorado in loja_lower for ignorado in ["f de frango", "steak", "smaxi"]):
                     continue
                 
-                if loja_excel not in dados_extraidos:
-                    dados_extraidos[loja_excel] = {"Franquia": loja_excel, "fechada": False}
+                # Nova trava: barra envios de números de ranking (ex: 2º, 11º)
+                if loja_excel.replace("º", "").replace("°", "").strip().isdigit():
+                    continue
                 
                 for k_map, col_idx in colunas_map.items():
                     if k_map != "BUSCA" and not k_map.startswith("99_"):
@@ -320,13 +321,16 @@ if uploaded_file is not None:
             if col_franquia:
                 lista_suja = df_temp[col_franquia[0]].dropna().astype(str).str.strip().unique().tolist()
                 
-                # --- FILTRO DE REDUNDÂNCIA ---
+               # --- FILTRO DE REDUNDÂNCIA E SUJEIRA ---
                 # Nomes exatos das lojas virtuais que queremos ocultar da lista final
                 lojas_ignoradas = ["f de frango", "steak", "smaxi", "steak burger", "smaxi burger"]
                 
                 st.session_state.lista_lojas = sorted([
                     f for f in lista_suja 
-                    if f.lower() != 'nan' and f != '' and f.lower() not in lojas_ignoradas
+                    if str(f).lower() != 'nan' and str(f).strip() != '' 
+                    and str(f).lower() not in lojas_ignoradas
+                    # Nova trava: ignora se for apenas um número de ranking (ex: 1º, 2º, 15°)
+                    and not str(f).replace("º", "").replace("°", "").strip().isdigit()
                 ])
                 
                 if not st.session_state.status_lojas:
