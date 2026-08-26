@@ -6,6 +6,7 @@ import json
 import os
 from io import BytesIO
 import gspread
+from google.oauth2.service_account import Credentials
 
 # --- Configuração da Página ---
 st.set_page_config(page_title="Portal de Faturamento", page_icon="📊", layout="wide")
@@ -72,18 +73,33 @@ if "lista_lojas" not in st.session_state: st.session_state.lista_lojas = []
 if "template_bytes" not in st.session_state: st.session_state.template_bytes = None
 if "rede_atual" not in st.session_state: st.session_state.rede_atual = "La Brasa Burger"
 
-# --- Funções de Nuvem (Google Sheets via Secrets Corrigido) ---
-# --- Funções de Nuvem (Google Sheets via Secrets Corrigido) ---
+# --- Funções de Nuvem (Motor Oficial do Google) ---
 def ligar_google_sheets():
     try:
-        # Puxa diretamente como dicionário (forma nativa do Streamlit)
-        cred_dict = dict(st.secrets["google_credentials"])
+        # 1. Puxa o segredo
+        segredo = st.secrets["google_credentials"]
         
-        # Conecta ao Google
-        gc = gspread.service_account_from_dict(cred_dict)
+        # 2. Garante que é um dicionário
+        if isinstance(segredo, str):
+            cred_dict = json.loads(segredo)
+        else:
+            cred_dict = dict(segredo)
+            
+        # 3. Força a correção absoluta das quebras de linha
+        if "private_key" in cred_dict:
+            cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
+            
+        # 4. Autorização oficial do Google (Ignora erros de sintaxe fina)
+        escopos = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
+        credenciais = Credentials.from_service_account_info(cred_dict, scopes=escopos)
+        gc = gspread.authorize(credenciais)
+        
         return gc.open("Base_Dados_Franquias")
     except Exception as e:
-        st.error(f"⚠️ Erro ao conectar ao Google Sheets: {e}")
+        st.error(f"⚠️ Erro detalhado ao conectar: {e}")
         return None
 
 def enviar_para_nuvem(df, rede):
@@ -298,7 +314,16 @@ if uploaded_file is not None:
             col_franquia = [c for c in df_temp.columns if col_busca in str(c).upper()]
             if col_franquia:
                 lista_suja = df_temp[col_franquia[0]].dropna().astype(str).str.strip().unique().tolist()
-                st.session_state.lista_lojas = sorted([f for f in lista_suja if f.lower() != 'nan' and f != ''])
+                
+                # --- FILTRO DE REDUNDÂNCIA ---
+                # Nomes exatos das lojas virtuais que queremos ocultar da lista final
+                lojas_ignoradas = ["f de frango", "steak", "smaxi", "steak burger", "smaxi burger"]
+                
+                st.session_state.lista_lojas = sorted([
+                    f for f in lista_suja 
+                    if f.lower() != 'nan' and f != '' and f.lower() not in lojas_ignoradas
+                ])
+                
                 if not st.session_state.status_lojas:
                     st.session_state.status_lojas = {f: "Pendente" for f in st.session_state.lista_lojas}
                 encontrou = True
