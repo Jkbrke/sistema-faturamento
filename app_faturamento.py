@@ -274,6 +274,10 @@ def extrair_dados_com_openpyxl(file_bytes, rede):
                 if loja_excel.replace("º", "").replace("°", "").strip().isdigit():
                     continue
                 
+                # --- A LINHA QUE SUMIU ESTÁ AQUI DE VOLTA ---
+                if loja_excel not in dados_extraidos:
+                    dados_extraidos[loja_excel] = {"Franquia": loja_excel, "fechada": False}
+                
                 for k_map, col_idx in colunas_map.items():
                     if k_map != "BUSCA" and not k_map.startswith("99_"):
                         val_celula = ws.cell(row=row, column=col_idx).value
