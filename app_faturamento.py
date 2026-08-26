@@ -264,6 +264,11 @@ def extrair_dados_com_openpyxl(file_bytes, rede):
                 celula = ws.cell(row=row, column=idx_busca).value
                 if not celula: continue
                 loja_excel = str(celula).strip()
+                loja_lower = loja_excel.lower()
+                
+                # 🛑 NOVO FILTRO GLOBAL: Ignora as linhas se o nome contiver essas palavras
+                if any(ignorado in loja_lower for ignorado in ["f de frango", "steak", "smaxi"]):
+                    continue
                 
                 if loja_excel not in dados_extraidos:
                     dados_extraidos[loja_excel] = {"Franquia": loja_excel, "fechada": False}
