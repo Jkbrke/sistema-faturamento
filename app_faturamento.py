@@ -104,10 +104,9 @@ def enviar_para_nuvem(df_novos, rede):
     except:
         ws = sh.add_worksheet(title=nome_aba, rows="2000", cols="50")
     
-    # 1. Removemos o .astype(str) para que os números de dinheiro cheguem como NÚMEROS REAIS no Google Sheets!
+    # Prepara os números puros para a nuvem
     df_novos = df_novos.where(pd.notnull(df_novos), "")
     
-    # 2. Puxa a nuvem e cria o motor Anti-Duplicatas (Upsert)
     try:
         dados_existentes = ws.get_all_records()
         df_existente = pd.DataFrame(dados_existentes)
@@ -117,22 +116,28 @@ def enviar_para_nuvem(df_novos, rede):
     if df_existente.empty:
         ws.update(range_name='A1', values=[df_novos.columns.tolist()] + df_novos.values.tolist())
     else:
-        # Une os dados que já existem na nuvem com os que você acabou de enviar
         df_combined = pd.concat([df_existente, df_novos], ignore_index=True)
         
-        # MÁGICA: Varre a planilha e, se achar a mesma loja no mesmo mês, apaga a velha e mantém só a nova!
+        # --- MÁGICA ANTI-DUPLICATAS (UPSERT) ---
         col_mes = "Mês Referência" if "Mês Referência" in df_combined.columns else "Mês/Ano"
         if "Franquia" in df_combined.columns and col_mes in df_combined.columns:
-            df_combined = df_combined.drop_duplicates(subset=["Franquia", col_mes], keep="last")
+            # Cria colunas secretas em minúsculo só para o robô comparar e não errar
+            df_combined['_franquia_lower'] = df_combined['Franquia'].astype(str).str.lower().str.strip()
+            df_combined['_mes_lower'] = df_combined[col_mes].astype(str).str.lower().str.strip()
             
-        # Limpa as células vazias que o pandas gerou
+            # Se achar a mesma franquia no mesmo mês, apaga a velha e guarda a nova!
+            df_combined = df_combined.drop_duplicates(subset=['_franquia_lower', '_mes_lower'], keep="last")
+            
+            # Remove as colunas secretas antes de salvar
+            df_combined = df_combined.drop(columns=['_franquia_lower', '_mes_lower'])
+            
         df_combined = df_combined.where(pd.notnull(df_combined), "")
         
-        # Reescreve a aba com a tabela perfeitamente limpa e sem duplicatas
+        # Grava a tabela 100% limpa por cima
         ws.clear()
         ws.update(range_name='A1', values=[df_combined.columns.tolist()] + df_combined.values.tolist())
         
-    return True, "Enviado para a Nuvem com sucesso (Duplicatas eliminadas)!"
+    return True, "Enviado para a Nuvem com sucesso!"
 
 def carregar_dados_nuvem(rede):
     sh = ligar_google_sheets()
@@ -148,13 +153,37 @@ def carregar_dados_nuvem(rede):
         st.warning(f"A aba '{nome_aba}' ainda não contém dados gravados no Google Sheets.")
         return pd.DataFrame()
 
+# --- NOVO CÉREBRO MATEMÁTICO (PERFEITO PARA PADRÃO BRASILEIRO) ---
 def calcular_expressao(expr):
     if not expr: return 0.0
-    expr = str(expr).replace(',', '.')
-    expr_limpa = re.sub(r'[^\d.\+\-\*/]', '', expr)
-    if not expr_limpa: return 0.0
-    try: return float(eval(expr_limpa))
-    except: return 0.0
+    expr = str(expr).strip()
+    
+    # 1. Tira símbolos inúteis (R$, espaços, letras)
+    expr = re.sub(r'[^\d.,\+\-\*/]', '', expr)
+    if not expr: return 0.0
+    
+    # 2. Permite que você faça contas na caixinha (ex: 27.999,90 + 1.000,50)
+    partes = re.split(r'([\+\-\*/])', expr)
+    expressao_final = ""
+    
+    for parte in partes:
+        if parte in "+\-*/":
+            expressao_final += parte
+        else:
+            p = parte.strip()
+            if ',' in p:
+                p = p.replace('.', '')  # Se tem vírgula, apaga o ponto (milhar)
+                p = p.replace(',', '.') # Transforma a vírgula no decimal do Python
+            else:
+                # Se digitar "1.000.000" sem vírgula, protege apagando os pontos
+                if p.count('.') > 1:
+                    p = p.replace('.', '')
+            expressao_final += p
+            
+    try:
+        return float(eval(expressao_final))
+    except:
+        return 0.0
 
 def salvar_backup_local():
     backup = {
@@ -524,7 +553,7 @@ with tab1:
                     
                     df_linha = pd.DataFrame([dados_loja])
                     sucesso, msg = enviar_para_nuvem(df_linha, st.session_state.rede_atual)
-                    if sucesso: st.toast(f"✅ Salvo e enviado para o Google Sheets!")
+                    if sucesso: st.toast(f"✅ Salvo e atualizado na Nuvem sem duplicatas!")
                     else: st.error(msg)
                     
                     st.rerun()
@@ -652,7 +681,7 @@ with tab2:
             df_calc['Data_Temp'] = pd.to_datetime(df_calc[col_mes], format='%m/%Y', errors='coerce')
             df_calc = df_calc.sort_values(by=['Franquia', 'Data_Temp'])
             
-            df_calc = df_calc.drop_duplicates(subset=['Franquia', col_mes])
+            df_calc = df_calc.drop_duplicates(subset=['Franquia', col_mes], keep="last")
             
             colunas_analise = [c for c in df_calc.columns if ("faturamento" in c.lower() or "pedidos" in c.lower()) and "var." not in c.lower()]
             novas_colunas = []
@@ -693,14 +722,12 @@ with tab2:
                     
         df_visual = df_visual[cols_order]
 
-        # --- FORMATADOR DE NÚMEROS E MOEDAS (CORRIGIDO PARA ORDENAÇÃO) ---
+        # --- FORMATADOR DE NÚMEROS E MOEDAS ---
         dicionario_formatos = {}
-        
         for col in df_visual.columns:
             if ("faturamento" in col.lower() or "royalties" in col.lower()) and not str(col).startswith("Var."):
                 df_visual[col] = pd.to_numeric(df_visual[col], errors='coerce')
                 dicionario_formatos[col] = lambda x: f"R$ {x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if pd.notnull(x) else ""
-                
             elif "pedidos" in col.lower() and not str(col).startswith("Var."):
                 df_visual[col] = pd.to_numeric(df_visual[col], errors='coerce')
                 dicionario_formatos[col] = lambda x: f"{int(x)}" if pd.notnull(x) else ""
