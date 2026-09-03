@@ -28,7 +28,7 @@ if not st.session_state.logado:
             st.rerun()
         else:
             st.error("Senha incorreta!")
-    st.stop() # Bloqueia o resto do site se não iniciar sessão
+    st.stop()
 
 # ==========================================================
 # RESTO DO SISTEMA (SÓ RODA SE A SENHA ESTIVER CORRETA)
@@ -333,7 +333,7 @@ if uploaded_file is not None:
                 break
         if encontrou: break
 
-    # O NOVO BOTÃO DE IMPORTAR (COM SINCRONIZAÇÃO INTELIGENTE DE ONDE PAROU)
+    # BOTÃO DE IMPORTAÇÃO COM SINCRONIZAÇÃO INTELIGENTE
     if st.sidebar.button("📥 Importar Dados desta Planilha"):
         if not mes_ref:
             st.sidebar.error("⚠️ Preencha o 'Mês/Ano de Referência' antes de importar!")
@@ -341,7 +341,7 @@ if uploaded_file is not None:
             with st.spinner("Lendo o Excel e cruzando com a Nuvem..."):
                 dados_lidos = extrair_dados_com_openpyxl(st.session_state.template_bytes, st.session_state.rede_atual)
                 
-                # 1. Busca na nuvem o que já foi enviado para esse mês exato
+                # Busca na nuvem o que já foi enviado
                 if "df_nuvem_cache" not in st.session_state:
                     st.session_state.df_nuvem_cache = carregar_dados_nuvem(st.session_state.rede_atual)
                 df_nuvem = st.session_state.df_nuvem_cache
@@ -354,7 +354,7 @@ if uploaded_file is not None:
                         if "Franquia" in ja_enviadas.columns:
                             lojas_ja_feitas = ja_enviadas["Franquia"].str.lower().tolist()
 
-                # 2. Preenche a tela e aplica a checagem inteligente
+                # Marca as lojas inteligentes
                 for loja, d in dados_lidos.items():
                     loja_match = next((l for l in st.session_state.lista_lojas if l.lower() == loja.lower()), None)
                     if loja_match:
@@ -493,6 +493,30 @@ with tab1:
                     tot += dados_loja["Faturamento Sistema"]
                     dados_loja["Faturamento Total (R$)"] = tot
 
+                    # --- MÁGICA INVISÍVEL: CÁLCULO DOS ROYALTIES DAS DARKS (4%) ---
+                    total_royalties = 0.0
+                    for cat in categorias:
+                        if cat.get("royalties", False):
+                            cid = cat["id"]
+                            faturamento_marca = dados_loja.get(f"Faturamento {cid}", 0.0)
+                            
+                            if faturamento_marca > 0:
+                                royalty = faturamento_marca * 0.04
+                                dados_loja[f"Royalties {cat['nome']} (4%)"] = royalty
+                                total_royalties += royalty
+                                
+                    if REDES_CONFIG[st.session_state.rede_atual]["usa_99_combo"]:
+                        marca_99 = dados_loja.get("marca_99", "Nenhuma")
+                        if marca_99 in ["Smaxi", "Steak", "F de Frango"]:
+                            faturamento_99 = dados_loja.get("faturamento_99", 0.0)
+                            if faturamento_99 > 0:
+                                royalty_99 = faturamento_99 * 0.04
+                                dados_loja[f"Royalties {marca_99} 99Food (4%)"] = royalty_99
+                                total_royalties += royalty_99
+
+                    if total_royalties > 0:
+                        dados_loja["Total Royalties Darks (R$)"] = total_royalties
+
                     st.session_state.dados_salvos[nome_loja] = dados_loja
                     st.session_state.status_lojas[nome_loja] = "Preenchida"
                     salvar_backup_local()
@@ -590,7 +614,7 @@ with tab2:
     
     col_btn, _ = st.columns([1, 2])
     with col_btn:
-        # AQUI ESTÁ A CORREÇÃO DO BOTÃO (KEY INCLUÍDA)
+        # BOTÃO CORRIGIDO COM "KEY" EXCLUSIVA
         if st.button("🔄 Forçar Recarregamento da Nuvem", key="btn_recarregar_nuvem"):
             if "df_nuvem_cache" in st.session_state:
                 del st.session_state["df_nuvem_cache"]
@@ -628,19 +652,19 @@ with tab2:
             df_calc['Data_Temp'] = pd.to_datetime(df_calc[col_mes], format='%m/%Y', errors='coerce')
             df_calc = df_calc.sort_values(by=['Franquia', 'Data_Temp'])
             
-            # Remove possíveis envios duplicados no histórico para garantir o cálculo perfeito
+            # Remove duplicados no histórico para garantir o cálculo perfeito
             df_calc = df_calc.drop_duplicates(subset=['Franquia', col_mes])
             
-            # Pega as colunas de faturamento e pedidos, ignorando maiúsculas/minúsculas
+            # Pega faturamento e pedidos, ignorando minúsculas
             colunas_analise = [c for c in df_calc.columns if ("faturamento" in c.lower() or "pedidos" in c.lower()) and "var." not in c.lower()]
             novas_colunas = []
             
             for col in colunas_analise:
                 df_calc[col] = pd.to_numeric(df_calc[col], errors='coerce')
-                # Puxa o dado do mês imediatamente anterior da mesma franquia
+                # Puxa o dado do mês imediatamente anterior
                 df_calc[f'{col}_Anterior'] = df_calc.groupby('Franquia')[col].shift(1)
                 
-                # Aplica a fórmula matemática
+                # Fórmula de crescimento
                 divisor = df_calc[f'{col}_Anterior'].replace(0, pd.NA)
                 var_col = f'Var. {col}'
                 df_calc[var_col] = ((df_calc[col] - df_calc[f'{col}_Anterior']) / divisor) * 100
@@ -654,17 +678,15 @@ with tab2:
                 df_calc[var_col] = df_calc[var_col].apply(formatar_crescimento)
                 novas_colunas.append(var_col)
                 
-            # Junta as colunas na tabela principal
             df_exibir = pd.merge(df_exibir, df_calc[['Franquia', col_mes] + novas_colunas], on=['Franquia', col_mes], how='left')
 
         df_visual = df_exibir.copy()
         
-        # --- LIMPANDO COLUNAS "FEIAS" (SISTEMA INTERNO) ---
+        # --- LIMPANDO COLUNAS "FEIAS" ---
         colunas_sujas = [c for c in df_visual.columns if "integra" in c.lower() or c.lower() in ["fechada", "status", "arquivo origem", "marca_99", "data_temp"]]
         df_visual = df_visual.drop(columns=colunas_sujas, errors='ignore')
 
         # --- ORDENADOR DE COLUNAS ---
-        # Coloca as colunas de "Variação" exatamente do lado direito das suas originais
         cols_order = []
         for c in df_visual.columns:
             if not str(c).startswith('Var. '):
@@ -717,8 +739,11 @@ with tab2:
                         
                         tot_fat += d.get("Faturamento Sistema", 0.0)
                         tot_ped += d.get("Pedidos Sistema", 0)
-                        linha["Faturamento Total Mês"] = tot_fat
-                        linha["Pedidos Total Mês"] = tot_ped
+                        
+                        # --- CORREÇÃO DO NOME DO TOTAL AQUI ---
+                        linha["Faturamento Total (R$)"] = tot_fat
+                        linha["Pedidos Total"] = tot_ped
+                        
                         if tot_fat > 0 or tot_ped > 0: linhas_hist.append(linha)
             
             if linhas_hist:
