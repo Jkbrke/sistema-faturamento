@@ -191,7 +191,7 @@ def extrair_dados_com_openpyxl(file_bytes, rede):
             "Pedidos iFood": ["PEDIDOS IFOOD"], "Faturamento iFood": ["FATURAMENTO IFOOD"],
             "Pedidos Sistema": ["TOTAL PEDIDOS SISTEMA", "PEDIDOS SISTEMA"], "Faturamento Sistema": ["FATURAMENTO TOTAL SISTEMA", "FATURAMENTO SISTEMA"],
             "Pedidos Smaxi": ["PEDIDOS SMAXI BURGER", "PEDIDOS SMAXI"], "Faturamento Smaxi": ["FATURAMENTO TOTAL SMAXI BURGER", "FATURAMENTO SMAXI"],
-            "Pedidos Steak": ["PEDIDOS STEAK BURGER", "PEDIDOS STEAK"], "Faturamento Steak": ["FATURAMENTO TOTAL STEAK BURGER", "FATURAMENTO STEAK"],
+            "Pedidos Steak": ["PEDIDOS STEAK BURGER", "PEDIDOS STEAK"], "Faturamento Steak": ["FATURAMENTO TOTAL STEAK BURGER", "FATURAMENTO TOTAL STEAK", "FATURAMENTO STEAK"],
             "Pedidos F de Frango": ["PEDIDOS F DE FRANGO"], "Faturamento F de Frango": ["FATURAMENTO TOTAL F DE FRANGO", "FATURAMENTO F DE FRANGO"]
         }
     else:
