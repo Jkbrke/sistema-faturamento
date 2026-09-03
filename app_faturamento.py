@@ -706,7 +706,26 @@ with tab2:
             elif "pedidos" in col.lower() and not str(col).startswith("Var."):
                 df_visual[col] = pd.to_numeric(df_visual[col], errors='coerce').apply(
                     lambda x: f"{int(x)}" if pd.notnull(x) else ""
-                )
+                )# --- FORMATADOR DE NÚMEROS E MOEDAS (CORRIGIDO PARA ORDENAÇÃO) ---
+        dicionario_formatos = {}
+        
+        for col in df_visual.columns:
+            if ("faturamento" in col.lower() or "royalties" in col.lower()) and not str(col).startswith("Var."):
+                # Mantém como número para o filtro matemático funcionar
+                df_visual[col] = pd.to_numeric(df_visual[col], errors='coerce')
+                # Cria a regra de maquiagem visual com o R$
+                dicionario_formatos[col] = lambda x: f"R$ {x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if pd.notnull(x) else ""
+                
+            elif "pedidos" in col.lower() and not str(col).startswith("Var."):
+                # Mantém como número inteiro
+                df_visual[col] = pd.to_numeric(df_visual[col], errors='coerce')
+                # Cria a regra de exibição
+                dicionario_formatos[col] = lambda x: f"{int(x)}" if pd.notnull(x) else ""
+        
+        # Aplica a máscara visual apenas na tabela final
+        tabela_estilizada = df_visual.style.format(dicionario_formatos)
+            
+        st.dataframe(tabela_estilizada, use_container_width=True)
             
         st.dataframe(df_visual, use_container_width=True)
         st.success(f"{len(df_exibir)} registros exibidos (de um total de {len(df_nuvem)} na nuvem).")
