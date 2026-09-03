@@ -94,7 +94,7 @@ def ligar_google_sheets():
         st.error(f"⚠️ Erro detalhado ao conectar: {e}")
         return None
 
-def enviar_para_nuvem(df, rede):
+def enviar_para_nuvem(df_novos, rede):
     sh = ligar_google_sheets()
     if not sh: return False, "Falha ao ligar ao Google Sheets."
     
@@ -104,27 +104,35 @@ def enviar_para_nuvem(df, rede):
     except:
         ws = sh.add_worksheet(title=nome_aba, rows="2000", cols="50")
     
-    df = df.fillna("").astype(str)
-    existentes = ws.get_all_values()
+    # 1. Removemos o .astype(str) para que os números de dinheiro cheguem como NÚMEROS REAIS no Google Sheets!
+    df_novos = df_novos.where(pd.notnull(df_novos), "")
     
-    if not existentes:
-        ws.update(range_name='A1', values=[df.columns.tolist()] + df.values.tolist())
+    # 2. Puxa a nuvem e cria o motor Anti-Duplicatas (Upsert)
+    try:
+        dados_existentes = ws.get_all_records()
+        df_existente = pd.DataFrame(dados_existentes)
+    except Exception:
+        df_existente = pd.DataFrame()
+        
+    if df_existente.empty:
+        ws.update(range_name='A1', values=[df_novos.columns.tolist()] + df_novos.values.tolist())
     else:
-        cabecalho_atual = existentes[0]
-        for col in df.columns:
-            if col not in cabecalho_atual:
-                cabecalho_atual.append(col)
-        ws.update(range_name='A1', values=[cabecalho_atual])
+        # Une os dados que já existem na nuvem com os que você acabou de enviar
+        df_combined = pd.concat([df_existente, df_novos], ignore_index=True)
         
-        novas_linhas = []
-        for _, row in df.iterrows():
-            linha = []
-            for col in cabecalho_atual:
-                linha.append(row[col] if col in df.columns else "")
-            novas_linhas.append(linha)
-        ws.append_rows(novas_linhas)
+        # MÁGICA: Varre a planilha e, se achar a mesma loja no mesmo mês, apaga a velha e mantém só a nova!
+        col_mes = "Mês Referência" if "Mês Referência" in df_combined.columns else "Mês/Ano"
+        if "Franquia" in df_combined.columns and col_mes in df_combined.columns:
+            df_combined = df_combined.drop_duplicates(subset=["Franquia", col_mes], keep="last")
+            
+        # Limpa as células vazias que o pandas gerou
+        df_combined = df_combined.where(pd.notnull(df_combined), "")
         
-    return True, "Enviado para a Nuvem com sucesso!"
+        # Reescreve a aba com a tabela perfeitamente limpa e sem duplicatas
+        ws.clear()
+        ws.update(range_name='A1', values=[df_combined.columns.tolist()] + df_combined.values.tolist())
+        
+    return True, "Enviado para a Nuvem com sucesso (Duplicatas eliminadas)!"
 
 def carregar_dados_nuvem(rede):
     sh = ligar_google_sheets()
