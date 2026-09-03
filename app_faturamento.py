@@ -663,4 +663,153 @@ with tab2:
                 else:
                     st.error(msg)
         else:
+            st.warning("Selecione pelo menos um arquivo Excel antigo.")# ==============================================================================
+# TAB 2: BASE DE DADOS / HISTÓRICO NA NUVEM (CARREGAMENTO AUTOMÁTICO)
+# ==============================================================================
+with tab2:
+    st.header("☁️ Dados Consolidados do Google Sheets")
+    st.write("Abaixo estão os dados reais gravados na nuvem. Os dados são carregados automaticamente assim que você entra na aba.")
+    
+    col_btn, _ = st.columns([1, 2])
+    with col_btn:
+        if st.button("🔄 Forçar Recarregamento da Nuvem"):
+            if "df_nuvem_cache" in st.session_state:
+                del st.session_state["df_nuvem_cache"]
+            st.rerun()
+        
+    if "df_nuvem_cache" not in st.session_state:
+        with st.spinner("Conectando e carregando dados da nuvem..."):
+            st.session_state.df_nuvem_cache = carregar_dados_nuvem(st.session_state.rede_atual)
+            
+    df_nuvem = st.session_state.df_nuvem_cache
+    
+    if not df_nuvem.empty:
+        col_mes = None
+        for c in ["Mês Referência", "Mês/Ano", "Mês", "Período"]:
+            if c in df_nuvem.columns:
+                col_mes = c
+                break
+        
+        if col_mes:
+            meses_unicos = [str(m) for m in sorted(df_nuvem[col_mes].unique()) if str(m).strip() != ""]
+            lista_opcoes_mes = ["Todos os Meses"] + meses_unicos
+            mes_selecionado = st.selectbox("🗓️ Filtrar por Mês/Ano:", lista_opcoes_mes)
+            if mes_selecionado != "Todos os Meses":
+                df_exibir = df_nuvem[df_nuvem[col_mes].astype(str) == mes_selecionado].copy()
+            else:
+                df_exibir = df_nuvem.copy()
+        else:
+            df_exibir = df_nuvem.copy()
+            
+        # ======================================================================
+        # NOVO MOTOR DE CÁLCULO DE CRESCIMENTO (%)
+        # ======================================================================
+        if col_mes and "Franquia" in df_exibir.columns:
+            df_calc = df_nuvem.copy()
+            df_calc['Data_Temp'] = pd.to_datetime(df_calc[col_mes], format='%m/%Y', errors='coerce')
+            df_calc = df_calc.sort_values(by=['Franquia', 'Data_Temp'])
+            
+            # Remove possíveis envios duplicados no histórico para garantir o cálculo perfeito
+            df_calc = df_calc.drop_duplicates(subset=['Franquia', col_mes])
+            
+            # Pega as colunas de faturamento e pedidos, ignorando maiúsculas/minúsculas
+            colunas_analise = [c for c in df_calc.columns if ("faturamento" in c.lower() or "pedidos" in c.lower()) and "var." not in c.lower()]
+            novas_colunas = []
+            
+            for col in colunas_analise:
+                df_calc[col] = pd.to_numeric(df_calc[col], errors='coerce')
+                # Puxa o dado do mês imediatamente anterior da mesma franquia
+                df_calc[f'{col}_Anterior'] = df_calc.groupby('Franquia')[col].shift(1)
+                
+                # Aplica a fórmula matemática
+                divisor = df_calc[f'{col}_Anterior'].replace(0, pd.NA)
+                var_col = f'Var. {col}'
+                df_calc[var_col] = ((df_calc[col] - df_calc[f'{col}_Anterior']) / divisor) * 100
+                
+                def formatar_crescimento(val):
+                    if pd.isna(val) or val == float('inf'): return "-"
+                    if val > 0: return f"🟢 +{val:.1f}% 📈"
+                    elif val < 0: return f"🔴 {val:.1f}% 📉"
+                    else: return "⚪ 0.0%"
+                    
+                df_calc[var_col] = df_calc[var_col].apply(formatar_crescimento)
+                novas_colunas.append(var_col)
+                
+            # Junta as colunas na tabela principal
+            df_exibir = pd.merge(df_exibir, df_calc[['Franquia', col_mes] + novas_colunas], on=['Franquia', col_mes], how='left')
+
+        df_visual = df_exibir.copy()
+        
+        # --- LIMPANDO COLUNAS "FEIAS" (SISTEMA INTERNO) ---
+        colunas_sujas = [c for c in df_visual.columns if "integra" in c.lower() or c.lower() in ["fechada", "status", "arquivo origem", "marca_99", "data_temp"]]
+        df_visual = df_visual.drop(columns=colunas_sujas, errors='ignore')
+
+        # --- ORDENADOR DE COLUNAS ---
+        # Coloca as colunas de "Variação" exatamente do lado direito das suas originais
+        cols_order = []
+        for c in df_visual.columns:
+            if not str(c).startswith('Var. '):
+                cols_order.append(c)
+                var_col = f'Var. {c}'
+                if var_col in df_visual.columns:
+                    cols_order.append(var_col)
+                    
+        df_visual = df_visual[cols_order]
+
+        # --- FORMATADOR DE NÚMEROS E MOEDAS ---
+        for col in df_visual.columns:
+            if ("faturamento" in col.lower() or "royalties" in col.lower()) and not str(col).startswith("Var."):
+                df_visual[col] = pd.to_numeric(df_visual[col], errors='coerce').apply(
+                    lambda x: f"R$ {x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if pd.notnull(x) else ""
+                )
+            elif "pedidos" in col.lower() and not str(col).startswith("Var."):
+                df_visual[col] = pd.to_numeric(df_visual[col], errors='coerce').apply(
+                    lambda x: f"{int(x)}" if pd.notnull(x) else ""
+                )
+            
+        st.dataframe(df_visual, use_container_width=True)
+        st.success(f"{len(df_exibir)} registros exibidos (de um total de {len(df_nuvem)} na nuvem).")
+        
+        csv_data = df_exibir.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Baixar Tabela Filtrada (CSV)", data=csv_data, file_name=f"faturamento_{st.session_state.rede_atual}_filtrado.csv", mime="text/csv")
+    else:
+        st.info("Ainda não existem registros gravados no Google Sheets para esta rede ou a ligação falhou.")
+
+    st.markdown("---")
+    st.header("📚 Construir Histórico de Meses Anteriores em Lote")
+    arquivos_hist = st.file_uploader("Carregue as planilhas antigas", type=["xlsx"], accept_multiple_files=True)
+    if st.button("☁️ Enviar Lote de Histórico para a Nuvem"):
+        if not mes_ref:
+            st.error("Por favor, preencha o campo 'Mês/Ano de Referência' na barra lateral antes de enviar.")
+        elif arquivos_hist:
+            linhas_hist = []
+            with st.spinner("Lendo planilhas e gravando no Google Sheets..."):
+                for arq in arquivos_hist:
+                    dados_arq = extrair_dados_com_openpyxl(arq.getvalue(), st.session_state.rede_atual)
+                    for loja, d in dados_arq.items():
+                        linha = {"Mês Referência": mes_ref, "Arquivo Origem": arq.name, "Franquia": loja, "Status": "Histórico"}
+                        tot_fat = 0.0
+                        tot_ped = 0
+                        for k, v in d.items():
+                            if ("Faturamento" in k or "Pedidos" in k or "Royalties" in k) and isinstance(v, (int, float)):
+                                linha[k] = v
+                                if k.startswith("Faturamento ") and "Sistema" not in k and "Bruto" not in k: tot_fat += v
+                                if k.startswith("Pedidos ") and "Sistema" not in k and "Bruto" not in k: tot_ped += v
+                        
+                        tot_fat += d.get("Faturamento Sistema", 0.0)
+                        tot_ped += d.get("Pedidos Sistema", 0)
+                        linha["Faturamento Total Mês"] = tot_fat
+                        linha["Pedidos Total Mês"] = tot_ped
+                        if tot_fat > 0 or tot_ped > 0: linhas_hist.append(linha)
+            
+            if linhas_hist:
+                df_hist_total = pd.DataFrame(linhas_hist)
+                sucesso, msg = enviar_para_nuvem(df_hist_total, st.session_state.rede_atual)
+                if sucesso:
+                    st.success("Histórico processado e enviado com sucesso para a nuvem!")
+                    if "df_nuvem_cache" in st.session_state: del st.session_state["df_nuvem_cache"]
+                    st.rerun()
+                else:
+                    st.error(msg)
+        else:
             st.warning("Selecione pelo menos um arquivo Excel antigo.")
