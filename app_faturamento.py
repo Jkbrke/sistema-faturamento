@@ -31,7 +31,7 @@ if not st.session_state.logado:
     st.stop()
 
 # ==========================================================
-# RESTO DO SISTEMA (SÓ RODA SE A SENHA ESTIVER CORRETA)
+# RESTO DO SISTEMA
 # ==========================================================
 
 ARQUIVO_BACKUP = "backup_web.json"
@@ -77,7 +77,6 @@ if "rede_atual" not in st.session_state: st.session_state.rede_atual = "La Brasa
 def ligar_google_sheets():
     try:
         segredo = st.secrets["google_credentials"]
-        
         if isinstance(segredo, str):
             cred_dict = json.loads(segredo)
         else:
@@ -86,10 +85,7 @@ def ligar_google_sheets():
         if "private_key" in cred_dict:
             cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
             
-        escopos = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive"
-        ]
+        escopos = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         credenciais = Credentials.from_service_account_info(cred_dict, scopes=escopos)
         gc = gspread.authorize(credenciais)
         
@@ -144,7 +140,6 @@ def carregar_dados_nuvem(rede):
         st.warning(f"A aba '{nome_aba}' ainda não contém dados gravados no Google Sheets.")
         return pd.DataFrame()
 
-# --- Funções do Motor Matemático ---
 def calcular_expressao(expr):
     if not expr: return 0.0
     expr = str(expr).replace(',', '.')
@@ -341,7 +336,6 @@ if uploaded_file is not None:
             with st.spinner("Lendo o Excel e cruzando com a Nuvem..."):
                 dados_lidos = extrair_dados_com_openpyxl(st.session_state.template_bytes, st.session_state.rede_atual)
                 
-                # Busca na nuvem o que já foi enviado
                 if "df_nuvem_cache" not in st.session_state:
                     st.session_state.df_nuvem_cache = carregar_dados_nuvem(st.session_state.rede_atual)
                 df_nuvem = st.session_state.df_nuvem_cache
@@ -354,7 +348,6 @@ if uploaded_file is not None:
                         if "Franquia" in ja_enviadas.columns:
                             lojas_ja_feitas = ja_enviadas["Franquia"].str.lower().tolist()
 
-                # Marca as lojas inteligentes
                 for loja, d in dados_lidos.items():
                     loja_match = next((l for l in st.session_state.lista_lojas if l.lower() == loja.lower()), None)
                     if loja_match:
@@ -543,7 +536,7 @@ with tab1:
                             "Pedidos iFood": ["PEDIDOS IFOOD"], "Faturamento iFood": ["FATURAMENTO IFOOD"],
                             "Pedidos Sistema": ["TOTAL PEDIDOS SISTEMA", "PEDIDOS SISTEMA"], "Faturamento Sistema": ["FATURAMENTO TOTAL SISTEMA", "FATURAMENTO SISTEMA"],
                             "Pedidos Smaxi": ["PEDIDOS SMAXI BURGER", "PEDIDOS SMAXI"], "Faturamento Smaxi": ["FATURAMENTO TOTAL SMAXI BURGER", "FATURAMENTO SMAXI"],
-                            "Pedidos Steak": ["PEDIDOS STEAK BURGER", "PEDIDOS STEAK"], "Faturamento Steak": ["FATURAMENTO TOTAL STEAK BURGER", "FATURAMENTO STEAK"],
+                            "Pedidos Steak": ["PEDIDOS STEAK BURGER", "PEDIDOS STEAK"], "Faturamento Steak": ["FATURAMENTO TOTAL STEAK BURGER", "FATURAMENTO TOTAL STEAK", "FATURAMENTO STEAK"],
                             "Pedidos F de Frango": ["PEDIDOS F DE FRANGO"], "Faturamento F de Frango": ["FATURAMENTO TOTAL F DE FRANGO", "FATURAMENTO F DE FRANGO"]
                         }
                     else:
@@ -606,7 +599,7 @@ with tab1:
                     st.download_button("📥 Baixar Excel Atualizado", data=output.getvalue(), file_name=f"Faturamento_{st.session_state.rede_atual}.xlsx")
 
 # ==============================================================================
-# TAB 2: BASE DE DADOS / HISTÓRICO NA NUVEM (CARREGAMENTO AUTOMÁTICO)
+# TAB 2: BASE DE DADOS / HISTÓRICO NA NUVEM
 # ==============================================================================
 with tab2:
     st.header("☁️ Dados Consolidados do Google Sheets")
@@ -614,7 +607,6 @@ with tab2:
     
     col_btn, _ = st.columns([1, 2])
     with col_btn:
-        # BOTÃO CORRIGIDO COM "KEY" EXCLUSIVA
         if st.button("🔄 Forçar Recarregamento da Nuvem", key="btn_recarregar_nuvem"):
             if "df_nuvem_cache" in st.session_state:
                 del st.session_state["df_nuvem_cache"]
@@ -652,19 +644,15 @@ with tab2:
             df_calc['Data_Temp'] = pd.to_datetime(df_calc[col_mes], format='%m/%Y', errors='coerce')
             df_calc = df_calc.sort_values(by=['Franquia', 'Data_Temp'])
             
-            # Remove duplicados no histórico para garantir o cálculo perfeito
             df_calc = df_calc.drop_duplicates(subset=['Franquia', col_mes])
             
-            # Pega faturamento e pedidos, ignorando minúsculas
             colunas_analise = [c for c in df_calc.columns if ("faturamento" in c.lower() or "pedidos" in c.lower()) and "var." not in c.lower()]
             novas_colunas = []
             
             for col in colunas_analise:
                 df_calc[col] = pd.to_numeric(df_calc[col], errors='coerce')
-                # Puxa o dado do mês imediatamente anterior
                 df_calc[f'{col}_Anterior'] = df_calc.groupby('Franquia')[col].shift(1)
                 
-                # Fórmula de crescimento
                 divisor = df_calc[f'{col}_Anterior'].replace(0, pd.NA)
                 var_col = f'Var. {col}'
                 df_calc[var_col] = ((df_calc[col] - df_calc[f'{col}_Anterior']) / divisor) * 100
@@ -697,27 +685,21 @@ with tab2:
                     
         df_visual = df_visual[cols_order]
 
-      # --- FORMATADOR DE NÚMEROS E MOEDAS (CORRIGIDO PARA ORDENAÇÃO) ---
+        # --- FORMATADOR DE NÚMEROS E MOEDAS (CORRIGIDO PARA ORDENAÇÃO) ---
         dicionario_formatos = {}
         
         for col in df_visual.columns:
             if ("faturamento" in col.lower() or "royalties" in col.lower()) and not str(col).startswith("Var."):
-                # Mantém como número para o filtro matemático funcionar
                 df_visual[col] = pd.to_numeric(df_visual[col], errors='coerce')
-                # Cria a regra de maquiagem visual com o R$
                 dicionario_formatos[col] = lambda x: f"R$ {x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if pd.notnull(x) else ""
                 
             elif "pedidos" in col.lower() and not str(col).startswith("Var."):
-                # Mantém como número inteiro
                 df_visual[col] = pd.to_numeric(df_visual[col], errors='coerce')
-                # Cria a regra de exibição
                 dicionario_formatos[col] = lambda x: f"{int(x)}" if pd.notnull(x) else ""
         
-        # Aplica a máscara visual apenas na tabela final
         tabela_estilizada = df_visual.style.format(dicionario_formatos)
             
         st.dataframe(tabela_estilizada, use_container_width=True)
-        st.dataframe(df_visual, use_container_width=True)
         st.success(f"{len(df_exibir)} registros exibidos (de um total de {len(df_nuvem)} na nuvem).")
         
         csv_data = df_exibir.to_csv(index=False).encode('utf-8')
@@ -749,7 +731,6 @@ with tab2:
                         tot_fat += d.get("Faturamento Sistema", 0.0)
                         tot_ped += d.get("Pedidos Sistema", 0)
                         
-                        # --- CORREÇÃO DO NOME DO TOTAL AQUI ---
                         linha["Faturamento Total (R$)"] = tot_fat
                         linha["Pedidos Total"] = tot_ped
                         
