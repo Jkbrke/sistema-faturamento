@@ -697,16 +697,7 @@ with tab2:
                     
         df_visual = df_visual[cols_order]
 
-        # --- FORMATADOR DE NÚMEROS E MOEDAS ---
-        for col in df_visual.columns:
-            if ("faturamento" in col.lower() or "royalties" in col.lower()) and not str(col).startswith("Var."):
-                df_visual[col] = pd.to_numeric(df_visual[col], errors='coerce').apply(
-                    lambda x: f"R$ {x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if pd.notnull(x) else ""
-                )
-            elif "pedidos" in col.lower() and not str(col).startswith("Var."):
-                df_visual[col] = pd.to_numeric(df_visual[col], errors='coerce').apply(
-                    lambda x: f"{int(x)}" if pd.notnull(x) else ""
-                )# --- FORMATADOR DE NÚMEROS E MOEDAS (CORRIGIDO PARA ORDENAÇÃO) ---
+      # --- FORMATADOR DE NÚMEROS E MOEDAS (CORRIGIDO PARA ORDENAÇÃO) ---
         dicionario_formatos = {}
         
         for col in df_visual.columns:
@@ -726,7 +717,6 @@ with tab2:
         tabela_estilizada = df_visual.style.format(dicionario_formatos)
             
         st.dataframe(tabela_estilizada, use_container_width=True)
-            
         st.dataframe(df_visual, use_container_width=True)
         st.success(f"{len(df_exibir)} registros exibidos (de um total de {len(df_nuvem)} na nuvem).")
         
