@@ -144,14 +144,20 @@ def carregar_dados_nuvem(rede):
         return pd.DataFrame()
 
 # ==============================================================================
-# OS DOIS NOVOS MOTORES MATEMÁTICOS (SEPARADOS)
+# OS DOIS NOVOS MOTORES MATEMÁTICOS (SEPARADOS E BLINDADOS)
 # ==============================================================================
 
 def calcular_faturamento(expr):
-    """Regra de Ouro: Força os dois últimos dígitos a serem centavos se não houver pontuação"""
+    """Regra de Ouro: Sempre força os dois últimos dígitos a serem centavos se não houver formatação correta"""
     if expr is None or str(expr).strip() == "": return 0.0
-    if isinstance(expr, float): return float(expr)
     
+    # Se for número puro vindo do Excel, convertemos para string de forma segura
+    if isinstance(expr, (int, float)):
+        if isinstance(expr, float) and expr.is_integer():
+            expr = str(int(expr))
+        else:
+            expr = str(expr)
+            
     expr = str(expr).strip()
     expr = re.sub(r'[^\d.,\+\-\*/]', '', expr)
     if not expr: return 0.0
@@ -166,26 +172,31 @@ def calcular_faturamento(expr):
             p = parte.strip()
             if not p: continue
             
-            # Se já vier com vírgula do Excel/Usuário (Ex: 27.999,90)
+            # Formatos com duas pontuações
             if ',' in p and '.' in p:
                 if p.rfind(',') > p.rfind('.'):
                     p = p.replace('.', '').replace(',', '.')
                 else:
                     p = p.replace(',', '')
+            # Apenas vírgula
             elif ',' in p:
                 p = p.replace(',', '.')
+            # Apenas ponto
             elif '.' in p:
-                if p.count('.') > 1: # Ex: 4.323.599
+                if p.count('.') > 1: 
                     p = p.replace('.', '')
                     if len(p) >= 2: p = p[:-2] + '.' + p[-2:]
                     else: p = str(float(p)/100)
-                else: # Tem só um ponto. Avalia se é decimal ou não.
-                    if len(p.split('.')[1]) != 2:
+                else: 
+                    # Se tiver EXATAMENTE 2 casas após o ponto, a gente confia
+                    if len(p.split('.')[1]) == 2:
+                        pass 
+                    else:
                         p = p.replace('.', '')
                         if len(p) >= 2: p = p[:-2] + '.' + p[-2:]
                         else: p = str(float(p)/100)
+            # Sem nada (Ex: 3793423 ou 150) - Transforma os dois últimos em centavos
             else:
-                # Regra de Ouro: Sem vírgula/ponto, vira centavos obrigatoriamente (Ex: 4323599 -> 43235.99)
                 if len(p) >= 2:
                     p = p[:-2] + '.' + p[-2:]
                     if p.startswith('.'): p = '0' + p
@@ -350,7 +361,7 @@ def extrair_dados_com_openpyxl(file_bytes, rede):
                 if loja_excel not in dados_extraidos:
                     dados_extraidos[loja_excel] = {"Franquia": loja_excel, "fechada": False}
                 
-                # --- AGORA LÊ MESMO QUE ESTEJA COMO "TEXTO" NO EXCEL E APLICA A REGRA! ---
+                # --- AGORA LÊ E APLICA A REGRA, SEJA TEXTO, FLOAT OU INTEIRO NO EXCEL ---
                 for k_map, col_idx in colunas_map.items():
                     if k_map != "BUSCA" and not k_map.startswith("99_"):
                         val_celula = ws.cell(row=row, column=col_idx).value
@@ -558,7 +569,6 @@ with tab1:
                     cid = cat["id"]
                     col_ped, col_fat, col_chk = st.columns([2, 3, 2])
                     
-                    # Formatação visual segura para a tela (sempre com vírgula!)
                     ped_val = dados_existentes.get(f"Pedidos {cid}", 0)
                     val_ped = str(ped_val)
                     
@@ -602,14 +612,14 @@ with tab1:
                 if st.form_submit_button("💾 Salvar e Enviar p/ Nuvem", type="primary"):
                     dados_loja = {"Mês Referência": mes_ref, "Franquia": nome_loja, "Status": "Preenchida", "fechada": False}
                     id_sistema = [c["id"] for c in categorias if c["is_sistema"]][0]
-                    ped_sis_bruto = calcular_pedidos(inputs_coletados[id_sistema]["pedidos"])
+                    ped_sis_bruto = int(calcular_pedidos(inputs_coletados[id_sistema]["pedidos"]))
                     fat_sis_bruto = calcular_faturamento(inputs_coletados[id_sistema]["fat"])
                     desc_fat = 0.0
                     desc_ped = 0
                     
                     for cat in categorias:
                         cid = cat["id"]
-                        p = calcular_pedidos(inputs_coletados[cid]["pedidos"])
+                        p = int(calcular_pedidos(inputs_coletados[cid]["pedidos"]))
                         f = calcular_faturamento(inputs_coletados[cid]["fat"])
                         dados_loja[f"Pedidos {cid}"] = p
                         dados_loja[f"Faturamento {cid}"] = f
@@ -619,7 +629,7 @@ with tab1:
 
                     if REDES_CONFIG[st.session_state.rede_atual]["usa_99_combo"]:
                         dados_loja["marca_99"] = inputs_99["marca"]
-                        dados_loja["pedidos_99"] = calcular_pedidos(inputs_99["pedidos"])
+                        dados_loja["pedidos_99"] = int(calcular_pedidos(inputs_99["pedidos"]))
                         dados_loja["faturamento_99"] = calcular_faturamento(inputs_99["fat"])
                         dados_loja["integra_99"] = inputs_99["integra"]
                         if inputs_99["integra"]:
