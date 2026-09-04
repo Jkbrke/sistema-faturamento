@@ -104,7 +104,6 @@ def enviar_para_nuvem(df_novos, rede):
     except:
         ws = sh.add_worksheet(title=nome_aba, rows="2000", cols="50")
     
-    # Prepara os números puros para a nuvem
     df_novos = df_novos.where(pd.notnull(df_novos), "")
     
     try:
@@ -117,23 +116,14 @@ def enviar_para_nuvem(df_novos, rede):
         ws.update(range_name='A1', values=[df_novos.columns.tolist()] + df_novos.values.tolist())
     else:
         df_combined = pd.concat([df_existente, df_novos], ignore_index=True)
-        
-        # --- MÁGICA ANTI-DUPLICATAS (UPSERT) ---
         col_mes = "Mês Referência" if "Mês Referência" in df_combined.columns else "Mês/Ano"
         if "Franquia" in df_combined.columns and col_mes in df_combined.columns:
-            # Cria colunas secretas em minúsculo só para o robô comparar e não errar
             df_combined['_franquia_lower'] = df_combined['Franquia'].astype(str).str.lower().str.strip()
             df_combined['_mes_lower'] = df_combined[col_mes].astype(str).str.lower().str.strip()
-            
-            # Se achar a mesma franquia no mesmo mês, apaga a velha e guarda a nova!
             df_combined = df_combined.drop_duplicates(subset=['_franquia_lower', '_mes_lower'], keep="last")
-            
-            # Remove as colunas secretas antes de salvar
             df_combined = df_combined.drop(columns=['_franquia_lower', '_mes_lower'])
             
         df_combined = df_combined.where(pd.notnull(df_combined), "")
-        
-        # Grava a tabela 100% limpa por cima
         ws.clear()
         ws.update(range_name='A1', values=[df_combined.columns.tolist()] + df_combined.values.tolist())
         
@@ -153,16 +143,15 @@ def carregar_dados_nuvem(rede):
         st.warning(f"A aba '{nome_aba}' ainda não contém dados gravados no Google Sheets.")
         return pd.DataFrame()
 
-# --- NOVO CÉREBRO MATEMÁTICO (PERFEITO PARA PADRÃO BRASILEIRO) ---
+# --- NOVO CÉREBRO MATEMÁTICO BLINDADO ---
 def calcular_expressao(expr):
     if not expr: return 0.0
     expr = str(expr).strip()
     
-    # 1. Tira símbolos inúteis (R$, espaços, letras)
+    # Remove R$, símbolos invisíveis e letras, mantendo apenas números e pontuação
     expr = re.sub(r'[^\d.,\+\-\*/]', '', expr)
     if not expr: return 0.0
     
-    # 2. Permite que você faça contas na caixinha (ex: 27.999,90 + 1.000,50)
     partes = re.split(r'([\+\-\*/])', expr)
     expressao_final = ""
     
@@ -171,11 +160,17 @@ def calcular_expressao(expr):
             expressao_final += parte
         else:
             p = parte.strip()
-            if ',' in p:
-                p = p.replace('.', '')  # Se tem vírgula, apaga o ponto (milhar)
-                p = p.replace(',', '.') # Transforma a vírgula no decimal do Python
+            # Se tem vírgula e ponto (ex: 27.999,90 ou 27,999.90)
+            if ',' in p and '.' in p:
+                if p.rfind(',') > p.rfind('.'): # Formato Brasileiro (R$)
+                    p = p.replace('.', '').replace(',', '.')
+                else: # Formato Americano ($)
+                    p = p.replace(',', '')
+            # Se tem só vírgula (ex: 1500,00)
+            elif ',' in p:
+                p = p.replace(',', '.')
+            # Se tem só ponto, previne erros apagando se for mais de um (ex: 1.000.000)
             else:
-                # Se digitar "1.000.000" sem vírgula, protege apagando os pontos
                 if p.count('.') > 1:
                     p = p.replace('.', '')
             expressao_final += p
@@ -365,8 +360,41 @@ if uploaded_file is not None:
                 break
         if encontrou: break
 
-    # BOTÃO DE IMPORTAÇÃO COM SINCRONIZAÇÃO INTELIGENTE
-    if st.sidebar.button("📥 Importar Dados desta Planilha"):
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**O que você deseja fazer?**")
+
+    # --- BOTÃO NOVO: INICIAR MÊS EM BRANCO (RECUPERA O PROGRESSO DA NUVEM) ---
+    if st.sidebar.button("✨ Iniciar Mês em Branco & Sincronizar"):
+        if not mes_ref:
+            st.sidebar.error("⚠️ Preencha o 'Mês/Ano' antes de sincronizar!")
+        else:
+            with st.spinner("Limpando formulários e buscando progresso na Nuvem..."):
+                if "df_nuvem_cache" not in st.session_state:
+                    st.session_state.df_nuvem_cache = carregar_dados_nuvem(st.session_state.rede_atual)
+                df_nuvem = st.session_state.df_nuvem_cache
+                
+                lojas_ja_feitas = []
+                if not df_nuvem.empty:
+                    col_mes = next((c for c in ["Mês Referência", "Mês/Ano", "Mês", "Período"] if c in df_nuvem.columns), None)
+                    if col_mes:
+                        ja_enviadas = df_nuvem[df_nuvem[col_mes].astype(str) == mes_ref]
+                        if "Franquia" in ja_enviadas.columns:
+                            lojas_ja_feitas = ja_enviadas["Franquia"].str.lower().tolist()
+
+                for loja in st.session_state.lista_lojas:
+                    st.session_state.dados_salvos[loja] = {} # Deixa o formulário pronto (vazio) para digitação
+                    
+                    if loja.lower() in lojas_ja_feitas:
+                        st.session_state.status_lojas[loja] = "Preenchida"
+                    else:
+                        st.session_state.status_lojas[loja] = "Pendente"
+                        
+                salvar_backup_local()
+                st.sidebar.success(f"Pronto! Progresso recuperado. Formulários prontos para digitação.")
+                st.rerun()
+
+    # --- BOTÃO ANTIGO: IMPORTAR (PUXA NÚMEROS DO EXCEL) ---
+    if st.sidebar.button("📥 Importar Dados do Excel"):
         if not mes_ref:
             st.sidebar.error("⚠️ Preencha o 'Mês/Ano de Referência' antes de importar!")
         else:
@@ -395,7 +423,7 @@ if uploaded_file is not None:
                             st.session_state.status_lojas[loja_match] = "Pendente"
                             
                 salvar_backup_local()
-                st.sidebar.success(f"Pronto! Lista atualizada e sincronizada com a nuvem.")
+                st.sidebar.success(f"Pronto! Dados do Excel carregados com sucesso.")
                 st.rerun()
 
 st.sidebar.markdown("---")
@@ -454,7 +482,6 @@ with tab1:
                     
                     df_fechada = pd.DataFrame([{"Mês Referência": mes_ref, "Franquia": nome_loja, "Status": "Fechada"}])
                     enviar_para_nuvem(df_fechada, st.session_state.rede_atual)
-                    
                     st.rerun()
 
             dados_existentes = st.session_state.dados_salvos.get(nome_loja, {})
@@ -470,24 +497,25 @@ with tab1:
                     val_fat = str(dados_existentes.get(f"Faturamento {cid}", "0"))
                     val_int = dados_existentes.get(f"integra_{cid}", False)
 
-                    with col_ped: ped_in = st.text_input(f"Pedidos - {cat['nome']}", value=val_ped, key=f"p_{cid}")
-                    with col_fat: fat_in = st.text_input(f"Fat. (R$) - {cat['nome']}", value=val_fat, key=f"f_{cid}")
+                    # A CHAVE ÚNICA EVITA A CONFUSÃO DAS CAIXINHAS AO MUDAR DE LOJA
+                    with col_ped: ped_in = st.text_input(f"Pedidos - {cat['nome']}", value=val_ped, key=f"p_{cid}_{nome_loja}")
+                    with col_fat: fat_in = st.text_input(f"Fat. (R$) - {cat['nome']}", value=val_fat, key=f"f_{cid}_{nome_loja}")
                     with col_chk:
                         st.write(""); st.write("")
                         int_in = False
-                        if not cat["is_sistema"]: int_in = st.checkbox("Descontar do Sistema?", value=val_int, key=f"i_{cid}")
+                        if not cat["is_sistema"]: int_in = st.checkbox("Descontar do Sistema?", value=val_int, key=f"i_{cid}_{nome_loja}")
                     inputs_coletados[cid] = {"pedidos": ped_in, "fat": fat_in, "integra": int_in}
 
                 inputs_99 = {}
                 if REDES_CONFIG[st.session_state.rede_atual]["usa_99_combo"]:
                     st.markdown("**Opções 99Food (La Brasa)**")
                     c99_1, c99_2, c99_3, c99_4 = st.columns([2, 2, 3, 2])
-                    with c99_1: m99 = st.selectbox("Marca 99Food", ["Nenhuma", "La Brasa Burger", "Smaxi", "Steak", "F de Frango"], key="m99_lb")
-                    with c99_2: p99 = st.text_input("Pedidos 99", value=str(dados_existentes.get("pedidos_99", "0")), key="p99_lb")
-                    with c99_3: f99 = st.text_input("Fat. 99 (R$)", value=str(dados_existentes.get("faturamento_99", "0")), key="f99_lb")
+                    with c99_1: m99 = st.selectbox("Marca 99Food", ["Nenhuma", "La Brasa Burger", "Smaxi", "Steak", "F de Frango"], key=f"m99_{nome_loja}")
+                    with c99_2: p99 = st.text_input("Pedidos 99", value=str(dados_existentes.get("pedidos_99", "0")), key=f"p99_{nome_loja}")
+                    with c99_3: f99 = st.text_input("Fat. 99 (R$)", value=str(dados_existentes.get("faturamento_99", "0")), key=f"f99_{nome_loja}")
                     with c99_4:
                         st.write(""); st.write("")
-                        i99 = st.checkbox("Descontar Sistema?", value=dados_existentes.get("integra_99", False), key="i99_lb")
+                        i99 = st.checkbox("Descontar Sistema?", value=dados_existentes.get("integra_99", False), key=f"i99_{nome_loja}")
                     inputs_99 = {"marca": m99, "pedidos": p99, "fat": f99, "integra": i99}
 
                 if st.form_submit_button("💾 Salvar e Enviar p/ Nuvem", type="primary"):
@@ -673,9 +701,6 @@ with tab2:
         else:
             df_exibir = df_nuvem.copy()
             
-        # ======================================================================
-        # NOVO MOTOR DE CÁLCULO DE CRESCIMENTO (%)
-        # ======================================================================
         if col_mes and "Franquia" in df_exibir.columns:
             df_calc = df_nuvem.copy()
             df_calc['Data_Temp'] = pd.to_datetime(df_calc[col_mes], format='%m/%Y', errors='coerce')
@@ -707,11 +732,9 @@ with tab2:
 
         df_visual = df_exibir.copy()
         
-        # --- LIMPANDO COLUNAS "FEIAS" ---
         colunas_sujas = [c for c in df_visual.columns if "integra" in c.lower() or c.lower() in ["fechada", "status", "arquivo origem", "marca_99", "data_temp"]]
         df_visual = df_visual.drop(columns=colunas_sujas, errors='ignore')
 
-        # --- ORDENADOR DE COLUNAS ---
         cols_order = []
         for c in df_visual.columns:
             if not str(c).startswith('Var. '):
@@ -722,7 +745,6 @@ with tab2:
                     
         df_visual = df_visual[cols_order]
 
-        # --- FORMATADOR DE NÚMEROS E MOEDAS ---
         dicionario_formatos = {}
         for col in df_visual.columns:
             if ("faturamento" in col.lower() or "royalties" in col.lower()) and not str(col).startswith("Var."):
