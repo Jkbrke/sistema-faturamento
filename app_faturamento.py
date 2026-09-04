@@ -148,7 +148,6 @@ def calcular_expressao(expr):
     if not expr: return 0.0
     expr = str(expr).strip()
     
-    # Remove R$, símbolos invisíveis e letras, mantendo apenas números e pontuação
     expr = re.sub(r'[^\d.,\+\-\*/]', '', expr)
     if not expr: return 0.0
     
@@ -160,16 +159,13 @@ def calcular_expressao(expr):
             expressao_final += parte
         else:
             p = parte.strip()
-            # Se tem vírgula e ponto (ex: 27.999,90 ou 27,999.90)
             if ',' in p and '.' in p:
-                if p.rfind(',') > p.rfind('.'): # Formato Brasileiro (R$)
+                if p.rfind(',') > p.rfind('.'):
                     p = p.replace('.', '').replace(',', '.')
-                else: # Formato Americano ($)
+                else:
                     p = p.replace(',', '')
-            # Se tem só vírgula (ex: 1500,00)
             elif ',' in p:
                 p = p.replace(',', '.')
-            # Se tem só ponto, previne erros apagando se for mais de um (ex: 1.000.000)
             else:
                 if p.count('.') > 1:
                     p = p.replace('.', '')
@@ -363,7 +359,7 @@ if uploaded_file is not None:
     st.sidebar.markdown("---")
     st.sidebar.markdown("**O que você deseja fazer?**")
 
-    # --- BOTÃO NOVO: INICIAR MÊS EM BRANCO (RECUPERA O PROGRESSO DA NUVEM) ---
+    # --- BOTÃO NOVO (CORRIGIDO PARA PUXAR OS DADOS DA NUVEM PARA A TELA) ---
     if st.sidebar.button("✨ Iniciar Mês em Branco & Sincronizar"):
         if not mes_ref:
             st.sidebar.error("⚠️ Preencha o 'Mês/Ano' antes de sincronizar!")
@@ -373,27 +369,34 @@ if uploaded_file is not None:
                     st.session_state.df_nuvem_cache = carregar_dados_nuvem(st.session_state.rede_atual)
                 df_nuvem = st.session_state.df_nuvem_cache
                 
-                lojas_ja_feitas = []
-                if not df_nuvem.empty:
-                    col_mes = next((c for c in ["Mês Referência", "Mês/Ano", "Mês", "Período"] if c in df_nuvem.columns), None)
-                    if col_mes:
-                        ja_enviadas = df_nuvem[df_nuvem[col_mes].astype(str) == mes_ref]
-                        if "Franquia" in ja_enviadas.columns:
-                            lojas_ja_feitas = ja_enviadas["Franquia"].str.lower().tolist()
+                ja_enviadas = pd.DataFrame()
+                col_mes = next((c for c in ["Mês Referência", "Mês/Ano", "Mês", "Período"] if c in df_nuvem.columns), None)
+                if col_mes and not df_nuvem.empty:
+                    ja_enviadas = df_nuvem[df_nuvem[col_mes].astype(str) == mes_ref]
 
                 for loja in st.session_state.lista_lojas:
-                    st.session_state.dados_salvos[loja] = {} # Deixa o formulário pronto (vazio) para digitação
+                    loja_nuvem = ja_enviadas[ja_enviadas["Franquia"].astype(str).str.lower() == loja.lower()] if not ja_enviadas.empty and "Franquia" in ja_enviadas.columns else pd.DataFrame()
                     
-                    if loja.lower() in lojas_ja_feitas:
-                        st.session_state.status_lojas[loja] = "Preenchida"
+                    if not loja_nuvem.empty:
+                        # Achou a loja na nuvem! Puxa o histórico exato para colocar nas caixinhas.
+                        linha_dict = loja_nuvem.iloc[-1].to_dict()
+                        st.session_state.dados_salvos[loja] = linha_dict
+                        
+                        # Verifica se estava marcada como "Fechada"
+                        if str(linha_dict.get("Status", "")) == "Fechada" or str(linha_dict.get("fechada", "")).lower() == "true":
+                            st.session_state.status_lojas[loja] = "Fechada"
+                        else:
+                            st.session_state.status_lojas[loja] = "Preenchida"
                     else:
+                        # Não tem nada na nuvem para esse mês, deixa em branco pra você digitar
+                        st.session_state.dados_salvos[loja] = {}
                         st.session_state.status_lojas[loja] = "Pendente"
                         
                 salvar_backup_local()
-                st.sidebar.success(f"Pronto! Progresso recuperado. Formulários prontos para digitação.")
+                st.sidebar.success(f"Pronto! Valores e progresso recuperados com sucesso.")
                 st.rerun()
 
-    # --- BOTÃO ANTIGO: IMPORTAR (PUXA NÚMEROS DO EXCEL) ---
+    # --- BOTÃO ANTIGO: IMPORTAR (TAMBÉM CORRIGIDO PARA PUXAR NUVEM SE EXISTIR) ---
     if st.sidebar.button("📥 Importar Dados do Excel"):
         if not mes_ref:
             st.sidebar.error("⚠️ Preencha o 'Mês/Ano de Referência' antes de importar!")
@@ -405,25 +408,29 @@ if uploaded_file is not None:
                     st.session_state.df_nuvem_cache = carregar_dados_nuvem(st.session_state.rede_atual)
                 df_nuvem = st.session_state.df_nuvem_cache
                 
-                lojas_ja_feitas = []
-                if not df_nuvem.empty:
-                    col_mes = next((c for c in ["Mês Referência", "Mês/Ano", "Mês", "Período"] if c in df_nuvem.columns), None)
-                    if col_mes:
-                        ja_enviadas = df_nuvem[df_nuvem[col_mes].astype(str) == mes_ref]
-                        if "Franquia" in ja_enviadas.columns:
-                            lojas_ja_feitas = ja_enviadas["Franquia"].str.lower().tolist()
+                ja_enviadas = pd.DataFrame()
+                col_mes = next((c for c in ["Mês Referência", "Mês/Ano", "Mês", "Período"] if c in df_nuvem.columns), None)
+                if col_mes and not df_nuvem.empty:
+                    ja_enviadas = df_nuvem[df_nuvem[col_mes].astype(str) == mes_ref]
 
                 for loja, d in dados_lidos.items():
                     loja_match = next((l for l in st.session_state.lista_lojas if l.lower() == loja.lower()), None)
                     if loja_match:
-                        st.session_state.dados_salvos[loja_match] = d
-                        if loja_match.lower() in lojas_ja_feitas:
-                            st.session_state.status_lojas[loja_match] = "Preenchida"
+                        loja_nuvem = ja_enviadas[ja_enviadas["Franquia"].astype(str).str.lower() == loja_match.lower()] if not ja_enviadas.empty and "Franquia" in ja_enviadas.columns else pd.DataFrame()
+                        
+                        if not loja_nuvem.empty:
+                            linha_dict = loja_nuvem.iloc[-1].to_dict()
+                            st.session_state.dados_salvos[loja_match] = linha_dict
+                            if str(linha_dict.get("Status", "")) == "Fechada" or str(linha_dict.get("fechada", "")).lower() == "true":
+                                st.session_state.status_lojas[loja_match] = "Fechada"
+                            else:
+                                st.session_state.status_lojas[loja_match] = "Preenchida"
                         else:
+                            st.session_state.dados_salvos[loja_match] = d
                             st.session_state.status_lojas[loja_match] = "Pendente"
                             
                 salvar_backup_local()
-                st.sidebar.success(f"Pronto! Dados do Excel carregados com sucesso.")
+                st.sidebar.success(f"Pronto! Dados do Excel carregados e sincronizados.")
                 st.rerun()
 
 st.sidebar.markdown("---")
@@ -497,7 +504,6 @@ with tab1:
                     val_fat = str(dados_existentes.get(f"Faturamento {cid}", "0"))
                     val_int = dados_existentes.get(f"integra_{cid}", False)
 
-                    # A CHAVE ÚNICA EVITA A CONFUSÃO DAS CAIXINHAS AO MUDAR DE LOJA
                     with col_ped: ped_in = st.text_input(f"Pedidos - {cat['nome']}", value=val_ped, key=f"p_{cid}_{nome_loja}")
                     with col_fat: fat_in = st.text_input(f"Fat. (R$) - {cat['nome']}", value=val_fat, key=f"f_{cid}_{nome_loja}")
                     with col_chk:
@@ -510,7 +516,13 @@ with tab1:
                 if REDES_CONFIG[st.session_state.rede_atual]["usa_99_combo"]:
                     st.markdown("**Opções 99Food (La Brasa)**")
                     c99_1, c99_2, c99_3, c99_4 = st.columns([2, 2, 3, 2])
-                    with c99_1: m99 = st.selectbox("Marca 99Food", ["Nenhuma", "La Brasa Burger", "Smaxi", "Steak", "F de Frango"], key=f"m99_{nome_loja}")
+                    
+                    # Puxar marca_99 se existir, senao "Nenhuma"
+                    marca_salva = str(dados_existentes.get("marca_99", "Nenhuma"))
+                    opcoes_marca = ["Nenhuma", "La Brasa Burger", "Smaxi", "Steak", "F de Frango"]
+                    idx_marca = opcoes_marca.index(marca_salva) if marca_salva in opcoes_marca else 0
+                    
+                    with c99_1: m99 = st.selectbox("Marca 99Food", opcoes_marca, index=idx_marca, key=f"m99_{nome_loja}")
                     with c99_2: p99 = st.text_input("Pedidos 99", value=str(dados_existentes.get("pedidos_99", "0")), key=f"p99_{nome_loja}")
                     with c99_3: f99 = st.text_input("Fat. 99 (R$)", value=str(dados_existentes.get("faturamento_99", "0")), key=f"f99_{nome_loja}")
                     with c99_4:
