@@ -73,12 +73,100 @@ if "lista_lojas" not in st.session_state: st.session_state.lista_lojas = []
 if "template_bytes" not in st.session_state: st.session_state.template_bytes = None
 if "rede_atual" not in st.session_state: st.session_state.rede_atual = "La Brasa Burger"
 
+# --- Funções de Nuvem ---
+def ligar_google_sheets():
+    try:
+        segredo = st.secrets["google_credentials"]
+        if isinstance(segredo, str):
+            cred_dict = json.loads(segredo)
+        else:
+            cred_dict = dict(segredo)
+            
+        if "private_key" in cred_dict:
+            cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
+            
+        escopos = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+        credenciais = Credentials.from_service_account_info(cred_dict, scopes=escopos)
+        gc = gspread.authorize(credenciais)
+        
+        return gc.open("Base_Dados_Franquias")
+    except Exception as e:
+        st.error(f"⚠️ Erro detalhado ao conectar: {e}")
+        return None
+
+def carregar_dados_nuvem(rede):
+    sh = ligar_google_sheets()
+    if not sh: 
+        return pd.DataFrame()
+        
+    nome_aba = "Historico_La_Brasa" if rede == "La Brasa Burger" else "Historico_La_Fruta"
+    try:
+        ws = sh.worksheet(nome_aba)
+        dados_brutos = ws.get_all_values()
+        if not dados_brutos or len(dados_brutos) == 1:
+            return pd.DataFrame()
+            
+        df = pd.DataFrame(dados_brutos[1:], columns=dados_brutos[0])
+        
+        for col in df.columns:
+            c_lower = col.lower()
+            if any(k in c_lower for k in ["faturamento", "royalties", "tot"]) and "pedidos" not in c_lower:
+                df[col] = df[col].apply(calcular_faturamento)
+            elif "pedidos" in c_lower:
+                df[col] = df[col].apply(calcular_pedidos)
+                
+        return df
+    except Exception as e:
+        st.warning(f"A aba '{nome_aba}' ainda não contém dados gravados no Google Sheets.")
+        return pd.DataFrame()
+
+def enviar_para_nuvem(df_novos, rede):
+    sh = ligar_google_sheets()
+    if not sh: return False, "Falha ao ligar ao Google Sheets."
+    
+    nome_aba = "Historico_La_Brasa" if rede == "La Brasa Burger" else "Historico_La_Fruta"
+    try:
+        ws = sh.worksheet(nome_aba)
+    except:
+        ws = sh.add_worksheet(title=nome_aba, rows="2000", cols="50")
+    
+    df_novos = df_novos.where(pd.notnull(df_novos), "")
+    df_existente = carregar_dados_nuvem(rede)
+        
+    if df_existente.empty:
+        df_combined = df_novos
+    else:
+        df_combined = pd.concat([df_existente, df_novos], ignore_index=True)
+        col_mes = "Mês Referência" if "Mês Referência" in df_combined.columns else "Mês/Ano"
+        if "Franquia" in df_combined.columns and col_mes in df_combined.columns:
+            df_combined['_franquia_lower'] = df_combined['Franquia'].astype(str).str.lower().str.strip()
+            df_combined['_mes_lower'] = df_combined[col_mes].astype(str).str.lower().str.strip()
+            df_combined = df_combined.drop_duplicates(subset=['_franquia_lower', '_mes_lower'], keep="last")
+            df_combined = df_combined.drop(columns=['_franquia_lower', '_mes_lower'])
+            
+    df_combined = df_combined.where(pd.notnull(df_combined), "")
+    
+    def converte_br(val):
+        try:
+            if pd.isna(val) or val == "": return ""
+            return f"{float(val):.2f}".replace('.', ',')
+        except:
+            return val
+
+    for col in df_combined.columns:
+        c_lower = col.lower()
+        if any(k in c_lower for k in ["faturamento", "royalties", "tot"]) and "pedidos" not in c_lower:
+            df_combined[col] = df_combined[col].apply(converte_br)
+
+    ws.clear()
+    ws.update(range_name='A1', values=[df_combined.columns.tolist()] + df_combined.values.tolist())
+        
+    return True, "Enviado para a Nuvem com sucesso!"
 
 # ==============================================================================
-# OS MOTORES MATEMÁTICOS (BLINDADOS CONTRA O EXCEL)
+# OS MOTORES MATEMÁTICOS (BLINDADOS)
 # ==============================================================================
 def calcular_faturamento(expr):
-    """Regra de Ouro: Pega sempre os últimos 2 dígitos para centavos se não houver formatação explícita"""
     if expr is None or str(expr).strip() == "": return 0.0
     
     if isinstance(expr, (int, float)):
@@ -135,7 +223,6 @@ def calcular_faturamento(expr):
     except: return 0.0
 
 def calcular_pedidos(expr):
-    """Protege os pedidos para não virarem centavos!"""
     if expr is None or str(expr).strip() == "": return 0
     if isinstance(expr, (int, float)): return int(expr)
     
@@ -168,105 +255,6 @@ def calcular_pedidos(expr):
             
     try: return int(eval(expressao_final))
     except: return 0
-
-
-# ==============================================================================
-# --- FUNÇÕES DE NUVEM (AGORA LENDO COMO TEXTO PURO) ---
-# ==============================================================================
-def ligar_google_sheets():
-    try:
-        segredo = st.secrets["google_credentials"]
-        if isinstance(segredo, str):
-            cred_dict = json.loads(segredo)
-        else:
-            cred_dict = dict(segredo)
-            
-        if "private_key" in cred_dict:
-            cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
-            
-        escopos = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-        credenciais = Credentials.from_service_account_info(cred_dict, scopes=escopos)
-        gc = gspread.authorize(credenciais)
-        
-        return gc.open("Base_Dados_Franquias")
-    except Exception as e:
-        st.error(f"⚠️ Erro detalhado ao conectar: {e}")
-        return None
-
-def carregar_dados_nuvem(rede):
-    sh = ligar_google_sheets()
-    if not sh: 
-        return pd.DataFrame()
-        
-    nome_aba = "Historico_La_Brasa" if rede == "La Brasa Burger" else "Historico_La_Fruta"
-    try:
-        ws = sh.worksheet(nome_aba)
-        
-        # AQUI ESTÁ O SEGREDO: Puxamos como texto cru, driblando o robô inglês do gspread
-        dados_brutos = ws.get_all_values()
-        if not dados_brutos or len(dados_brutos) == 1:
-            return pd.DataFrame()
-            
-        df = pd.DataFrame(dados_brutos[1:], columns=dados_brutos[0])
-        
-        # Processamos com a nossa matemática brasileira blindada
-        for col in df.columns:
-            c_lower = col.lower()
-            if any(k in c_lower for k in ["faturamento", "royalties", "tot"]) and "pedidos" not in c_lower:
-                df[col] = df[col].apply(calcular_faturamento)
-            elif "pedidos" in c_lower:
-                df[col] = df[col].apply(calcular_pedidos)
-                
-        return df
-    except Exception as e:
-        st.warning(f"A aba '{nome_aba}' ainda não contém dados gravados no Google Sheets.")
-        return pd.DataFrame()
-
-def enviar_para_nuvem(df_novos, rede):
-    sh = ligar_google_sheets()
-    if not sh: return False, "Falha ao ligar ao Google Sheets."
-    
-    nome_aba = "Historico_La_Brasa" if rede == "La Brasa Burger" else "Historico_La_Fruta"
-    try:
-        ws = sh.worksheet(nome_aba)
-    except:
-        ws = sh.add_worksheet(title=nome_aba, rows="2000", cols="50")
-    
-    df_novos = df_novos.where(pd.notnull(df_novos), "")
-    
-    # Usa a nossa função blindada para saber o que já tem na nuvem
-    df_existente = carregar_dados_nuvem(rede)
-        
-    if df_existente.empty:
-        df_combined = df_novos
-    else:
-        df_combined = pd.concat([df_existente, df_novos], ignore_index=True)
-        col_mes = "Mês Referência" if "Mês Referência" in df_combined.columns else "Mês/Ano"
-        if "Franquia" in df_combined.columns and col_mes in df_combined.columns:
-            df_combined['_franquia_lower'] = df_combined['Franquia'].astype(str).str.lower().str.strip()
-            df_combined['_mes_lower'] = df_combined[col_mes].astype(str).str.lower().str.strip()
-            df_combined = df_combined.drop_duplicates(subset=['_franquia_lower', '_mes_lower'], keep="last")
-            df_combined = df_combined.drop(columns=['_franquia_lower', '_mes_lower'])
-            
-    df_combined = df_combined.where(pd.notnull(df_combined), "")
-    
-    # --- MÁGICA DE LOCALIZAÇÃO (ESCUDO BRASIL) ---
-    def converte_br(val):
-        try:
-            if pd.isna(val) or val == "": return ""
-            return f"{float(val):.2f}".replace('.', ',')
-        except:
-            return val
-
-    for col in df_combined.columns:
-        c_lower = col.lower()
-        if any(k in c_lower for k in ["faturamento", "royalties", "tot"]) and "pedidos" not in c_lower:
-            df_combined[col] = df_combined[col].apply(converte_br)
-
-    ws.clear()
-    ws.update(range_name='A1', values=[df_combined.columns.tolist()] + df_combined.values.tolist())
-        
-    return True, "Enviado para a Nuvem com sucesso!"
 
 # ==============================================================================
 
@@ -803,14 +791,28 @@ with tab2:
                 col_mes = c
                 break
         
+        # === NOVOS FILTROS (MÊS E UNIDADE LADO A LADO) ===
         if col_mes:
             meses_unicos = [str(m) for m in sorted(df_nuvem[col_mes].unique()) if str(m).strip() != ""]
             lista_opcoes_mes = ["Todos os Meses"] + meses_unicos
-            mes_selecionado = st.selectbox("🗓️ Filtrar por Mês/Ano:", lista_opcoes_mes)
+            
+            c_filtro1, c_filtro2 = st.columns(2)
+            with c_filtro1:
+                mes_selecionado = st.selectbox("🗓️ Filtrar por Mês/Ano:", lista_opcoes_mes)
+            
+            with c_filtro2:
+                if "Franquia" in df_nuvem.columns:
+                    franquias_unicas = sorted([str(f) for f in df_nuvem["Franquia"].unique() if str(f).strip() != ""])
+                    lista_opcoes_franq = ["Todas as Unidades"] + franquias_unicas
+                    franq_selecionada = st.selectbox("🏪 Filtrar por Unidade:", lista_opcoes_franq)
+                else:
+                    franq_selecionada = "Todas as Unidades"
+
+            df_exibir = df_nuvem.copy()
             if mes_selecionado != "Todos os Meses":
-                df_exibir = df_nuvem[df_nuvem[col_mes].astype(str) == mes_selecionado].copy()
-            else:
-                df_exibir = df_nuvem.copy()
+                df_exibir = df_exibir[df_exibir[col_mes].astype(str) == mes_selecionado]
+            if franq_selecionada != "Todas as Unidades":
+                df_exibir = df_exibir[df_exibir["Franquia"].astype(str) == franq_selecionada]
         else:
             df_exibir = df_nuvem.copy()
             
