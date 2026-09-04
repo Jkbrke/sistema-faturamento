@@ -113,7 +113,7 @@ def enviar_para_nuvem(df_novos, rede):
         df_existente = pd.DataFrame()
         
     if df_existente.empty:
-        ws.update(range_name='A1', values=[df_novos.columns.tolist()] + df_novos.values.tolist())
+        df_combined = df_novos
     else:
         df_combined = pd.concat([df_existente, df_novos], ignore_index=True)
         col_mes = "Mês Referência" if "Mês Referência" in df_combined.columns else "Mês/Ano"
@@ -123,9 +123,23 @@ def enviar_para_nuvem(df_novos, rede):
             df_combined = df_combined.drop_duplicates(subset=['_franquia_lower', '_mes_lower'], keep="last")
             df_combined = df_combined.drop(columns=['_franquia_lower', '_mes_lower'])
             
-        df_combined = df_combined.where(pd.notnull(df_combined), "")
-        ws.clear()
-        ws.update(range_name='A1', values=[df_combined.columns.tolist()] + df_combined.values.tolist())
+    df_combined = df_combined.where(pd.notnull(df_combined), "")
+    
+    # --- MÁGICA DE LOCALIZAÇÃO (ESCUDO BRASIL) ---
+    # Transforma os números em texto com VÍRGULA antes de mandar para o Google
+    def converte_br(val):
+        try:
+            if pd.isna(val) or val == "": return ""
+            return f"{float(val):.2f}".replace('.', ',')
+        except:
+            return val
+
+    for col in df_combined.columns:
+        if any(k in col for k in ["Faturamento", "Royalties", "Tot"]):
+            df_combined[col] = df_combined[col].apply(converte_br)
+
+    ws.clear()
+    ws.update(range_name='A1', values=[df_combined.columns.tolist()] + df_combined.values.tolist())
         
     return True, "Enviado para a Nuvem com sucesso!"
 
@@ -144,20 +158,17 @@ def carregar_dados_nuvem(rede):
         return pd.DataFrame()
 
 # ==============================================================================
-# OS DOIS NOVOS MOTORES MATEMÁTICOS (SEPARADOS E BLINDADOS)
+# OS MOTORES MATEMÁTICOS (CORRIGIDOS)
 # ==============================================================================
 
 def calcular_faturamento(expr):
-    """Regra de Ouro: Sempre força os dois últimos dígitos a serem centavos se não houver formatação correta"""
+    """Pega qualquer formato (80.282,57) e extrai o número matemático puro perfeito"""
     if expr is None or str(expr).strip() == "": return 0.0
     
-    # Se for número puro vindo do Excel, convertemos para string de forma segura
+    # Se o Excel já leu como número, confia nele
     if isinstance(expr, (int, float)):
-        if isinstance(expr, float) and expr.is_integer():
-            expr = str(int(expr))
-        else:
-            expr = str(expr)
-            
+        return float(expr)
+        
     expr = str(expr).strip()
     expr = re.sub(r'[^\d.,\+\-\*/]', '', expr)
     if not expr: return 0.0
@@ -172,7 +183,7 @@ def calcular_faturamento(expr):
             p = parte.strip()
             if not p: continue
             
-            # Formatos com duas pontuações
+            # Se já vier com vírgula do Excel/Usuário (Ex: 80.282,57)
             if ',' in p and '.' in p:
                 if p.rfind(',') > p.rfind('.'):
                     p = p.replace('.', '').replace(',', '.')
@@ -183,25 +194,14 @@ def calcular_faturamento(expr):
                 p = p.replace(',', '.')
             # Apenas ponto
             elif '.' in p:
-                if p.count('.') > 1: 
+                if p.count('.') > 1: # Ex: 1.000.000
                     p = p.replace('.', '')
-                    if len(p) >= 2: p = p[:-2] + '.' + p[-2:]
-                    else: p = str(float(p)/100)
                 else: 
-                    # Se tiver EXATAMENTE 2 casas após o ponto, a gente confia
-                    if len(p.split('.')[1]) == 2:
-                        pass 
-                    else:
+                    # Avalia se é decimal ou milhar
+                    parts = p.split('.')
+                    if len(parts[1]) != 2 and len(parts[1]) != 1:
+                        # Provável separador de milhar
                         p = p.replace('.', '')
-                        if len(p) >= 2: p = p[:-2] + '.' + p[-2:]
-                        else: p = str(float(p)/100)
-            # Sem nada (Ex: 3793423 ou 150) - Transforma os dois últimos em centavos
-            else:
-                if len(p) >= 2:
-                    p = p[:-2] + '.' + p[-2:]
-                    if p.startswith('.'): p = '0' + p
-                else:
-                    p = str(float(p)/100)
             expressao_final += p
             
     try: return float(eval(expressao_final))
@@ -361,7 +361,6 @@ def extrair_dados_com_openpyxl(file_bytes, rede):
                 if loja_excel not in dados_extraidos:
                     dados_extraidos[loja_excel] = {"Franquia": loja_excel, "fechada": False}
                 
-                # --- AGORA LÊ E APLICA A REGRA, SEJA TEXTO, FLOAT OU INTEIRO NO EXCEL ---
                 for k_map, col_idx in colunas_map.items():
                     if k_map != "BUSCA" and not k_map.startswith("99_"):
                         val_celula = ws.cell(row=row, column=col_idx).value
