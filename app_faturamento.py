@@ -164,7 +164,7 @@ def enviar_para_nuvem(df_novos, rede):
     return True, "Enviado para a Nuvem com sucesso!"
 
 # ==============================================================================
-# OS MOTORES MATEMÁTICOS (BLINDADOS)
+# OS MOTORES MATEMÁTICOS
 # ==============================================================================
 def calcular_faturamento(expr):
     if expr is None or str(expr).strip() == "": return 0.0
@@ -649,9 +649,14 @@ with tab1:
                     dados_loja["Pedidos Sistema"] = max(0, ped_sis_bruto - desc_ped)
                     dados_loja["Faturamento Sistema"] = max(0.0, fat_sis_bruto - desc_fat)
 
-                    tot = sum(v for k, v in dados_loja.items() if "Faturamento" in k and isinstance(v, float) and "Bruto" not in k and "Sistema" not in k)
-                    tot += dados_loja["Faturamento Sistema"]
-                    dados_loja["Faturamento Total (R$)"] = tot
+                    # --- CORREÇÃO AQUI (TOTAIS E PEDIDOS 100% EXATOS) ---
+                    tot_fat = sum(v for k, v in dados_loja.items() if "faturamento" in k.lower() and isinstance(v, float) and "bruto" not in k.lower() and "sistema" not in k.lower() and "total" not in k.lower())
+                    tot_fat += dados_loja["Faturamento Sistema"]
+                    dados_loja["Faturamento Total (R$)"] = tot_fat
+
+                    tot_ped = sum(v for k, v in dados_loja.items() if "pedidos" in k.lower() and isinstance(v, int) and "bruto" not in k.lower() and "sistema" not in k.lower() and "total" not in k.lower())
+                    tot_ped += dados_loja["Pedidos Sistema"]
+                    dados_loja["Pedidos Total"] = tot_ped
 
                     total_royalties = 0.0
                     for cat in categorias:
@@ -791,7 +796,6 @@ with tab2:
                 col_mes = c
                 break
         
-        # === NOVOS FILTROS (MÊS E UNIDADE LADO A LADO) ===
         if col_mes:
             meses_unicos = [str(m) for m in sorted(df_nuvem[col_mes].unique()) if str(m).strip() != ""]
             lista_opcoes_mes = ["Todos os Meses"] + meses_unicos
