@@ -73,7 +73,7 @@ if "lista_lojas" not in st.session_state: st.session_state.lista_lojas = []
 if "template_bytes" not in st.session_state: st.session_state.template_bytes = None
 if "rede_atual" not in st.session_state: st.session_state.rede_atual = "La Brasa Burger"
 
-# --- Funções de Nuvem (Motor Oficial do Google) ---
+# --- Funções de Nuvem ---
 def ligar_google_sheets():
     try:
         segredo = st.secrets["google_credentials"]
@@ -143,11 +143,16 @@ def carregar_dados_nuvem(rede):
         st.warning(f"A aba '{nome_aba}' ainda não contém dados gravados no Google Sheets.")
         return pd.DataFrame()
 
-# --- NOVO CÉREBRO MATEMÁTICO BLINDADO ---
-def calcular_expressao(expr):
-    if not expr: return 0.0
-    expr = str(expr).strip()
+# ==============================================================================
+# OS DOIS NOVOS MOTORES MATEMÁTICOS (SEPARADOS)
+# ==============================================================================
+
+def calcular_faturamento(expr):
+    """Regra de Ouro: Força os dois últimos dígitos a serem centavos se não houver pontuação"""
+    if expr is None or str(expr).strip() == "": return 0.0
+    if isinstance(expr, float): return float(expr)
     
+    expr = str(expr).strip()
     expr = re.sub(r'[^\d.,\+\-\*/]', '', expr)
     if not expr: return 0.0
     
@@ -159,6 +164,57 @@ def calcular_expressao(expr):
             expressao_final += parte
         else:
             p = parte.strip()
+            if not p: continue
+            
+            # Se já vier com vírgula do Excel/Usuário (Ex: 27.999,90)
+            if ',' in p and '.' in p:
+                if p.rfind(',') > p.rfind('.'):
+                    p = p.replace('.', '').replace(',', '.')
+                else:
+                    p = p.replace(',', '')
+            elif ',' in p:
+                p = p.replace(',', '.')
+            elif '.' in p:
+                if p.count('.') > 1: # Ex: 4.323.599
+                    p = p.replace('.', '')
+                    if len(p) >= 2: p = p[:-2] + '.' + p[-2:]
+                    else: p = str(float(p)/100)
+                else: # Tem só um ponto. Avalia se é decimal ou não.
+                    if len(p.split('.')[1]) != 2:
+                        p = p.replace('.', '')
+                        if len(p) >= 2: p = p[:-2] + '.' + p[-2:]
+                        else: p = str(float(p)/100)
+            else:
+                # Regra de Ouro: Sem vírgula/ponto, vira centavos obrigatoriamente (Ex: 4323599 -> 43235.99)
+                if len(p) >= 2:
+                    p = p[:-2] + '.' + p[-2:]
+                    if p.startswith('.'): p = '0' + p
+                else:
+                    p = str(float(p)/100)
+            expressao_final += p
+            
+    try: return float(eval(expressao_final))
+    except: return 0.0
+
+
+def calcular_pedidos(expr):
+    """Protege os pedidos para não virarem centavos!"""
+    if expr is None or str(expr).strip() == "": return 0
+    if isinstance(expr, (int, float)): return int(expr)
+    
+    expr = str(expr).strip()
+    expr = re.sub(r'[^\d.,\+\-\*/]', '', expr)
+    if not expr: return 0
+    
+    partes = re.split(r'([\+\-\*/])', expr)
+    expressao_final = ""
+    for parte in partes:
+        if parte in "+\-*/":
+            expressao_final += parte
+        else:
+            p = parte.strip()
+            if not p: continue
+            
             if ',' in p and '.' in p:
                 if p.rfind(',') > p.rfind('.'):
                     p = p.replace('.', '').replace(',', '.')
@@ -167,14 +223,17 @@ def calcular_expressao(expr):
             elif ',' in p:
                 p = p.replace(',', '.')
             else:
-                if p.count('.') > 1:
-                    p = p.replace('.', '')
+                if p.count('.') > 1: p = p.replace('.', '')
+            
+            # Corta a parte decimal para ficar só número inteiro
+            if '.' in p: p = p.split('.')[0]
+            if not p: p = '0'
             expressao_final += p
             
-    try:
-        return float(eval(expressao_final))
-    except:
-        return 0.0
+    try: return int(eval(expressao_final))
+    except: return 0
+
+# ==============================================================================
 
 def salvar_backup_local():
     backup = {
@@ -285,29 +344,32 @@ def extrair_dados_com_openpyxl(file_bytes, rede):
                 loja_excel = str(celula).strip()
                 loja_lower = loja_excel.lower()
                 
-                if any(ignorado in loja_lower for ignorado in ["f de frango", "steak", "smaxi"]):
-                    continue
-                
-                if loja_excel.replace("º", "").replace("°", "").strip().isdigit():
-                    continue
+                if any(ignorado in loja_lower for ignorado in ["f de frango", "steak", "smaxi"]): continue
+                if loja_excel.replace("º", "").replace("°", "").strip().isdigit(): continue
                 
                 if loja_excel not in dados_extraidos:
                     dados_extraidos[loja_excel] = {"Franquia": loja_excel, "fechada": False}
                 
+                # --- AGORA LÊ MESMO QUE ESTEJA COMO "TEXTO" NO EXCEL E APLICA A REGRA! ---
                 for k_map, col_idx in colunas_map.items():
                     if k_map != "BUSCA" and not k_map.startswith("99_"):
                         val_celula = ws.cell(row=row, column=col_idx).value
-                        if isinstance(val_celula, (int, float)):
-                            dados_extraidos[loja_excel][k_map] = val_celula
+                        if val_celula is not None:
+                            if "Faturamento" in k_map:
+                                dados_extraidos[loja_excel][k_map] = calcular_faturamento(val_celula)
+                            elif "Pedidos" in k_map:
+                                dados_extraidos[loja_excel][k_map] = calcular_pedidos(val_celula)
 
                 if rede == "La Brasa Burger":
                     for m_key, m_name in [("99_La Brasa", "La Brasa Burger"), ("99_Smaxi", "Smaxi"), ("99_Steak", "Steak"), ("99_F de Frango", "F de Frango"), ("99_Geral", "Geral")]:
                         if m_key in colunas_map:
                             val_99 = ws.cell(row=row, column=colunas_map[m_key]).value
-                            if val_99 and isinstance(val_99, (int, float)) and val_99 > 0:
-                                dados_extraidos[loja_excel]["marca_99"] = m_name if m_name != "Geral" else "La Brasa Burger"
-                                dados_extraidos[loja_excel]["faturamento_99"] = val_99
-                                break
+                            if val_99 is not None:
+                                f_99 = calcular_faturamento(val_99)
+                                if f_99 > 0:
+                                    dados_extraidos[loja_excel]["marca_99"] = m_name if m_name != "Geral" else "La Brasa Burger"
+                                    dados_extraidos[loja_excel]["faturamento_99"] = f_99
+                                    break
     return dados_extraidos
 
 # --- BARRA LATERAL ---
@@ -359,7 +421,6 @@ if uploaded_file is not None:
     st.sidebar.markdown("---")
     st.sidebar.markdown("**O que você deseja fazer?**")
 
-    # --- BOTÃO NOVO (CORRIGIDO PARA PUXAR OS DADOS DA NUVEM PARA A TELA) ---
     if st.sidebar.button("✨ Iniciar Mês em Branco & Sincronizar"):
         if not mes_ref:
             st.sidebar.error("⚠️ Preencha o 'Mês/Ano' antes de sincronizar!")
@@ -378,17 +439,14 @@ if uploaded_file is not None:
                     loja_nuvem = ja_enviadas[ja_enviadas["Franquia"].astype(str).str.lower() == loja.lower()] if not ja_enviadas.empty and "Franquia" in ja_enviadas.columns else pd.DataFrame()
                     
                     if not loja_nuvem.empty:
-                        # Achou a loja na nuvem! Puxa o histórico exato para colocar nas caixinhas.
                         linha_dict = loja_nuvem.iloc[-1].to_dict()
                         st.session_state.dados_salvos[loja] = linha_dict
                         
-                        # Verifica se estava marcada como "Fechada"
                         if str(linha_dict.get("Status", "")) == "Fechada" or str(linha_dict.get("fechada", "")).lower() == "true":
                             st.session_state.status_lojas[loja] = "Fechada"
                         else:
                             st.session_state.status_lojas[loja] = "Preenchida"
                     else:
-                        # Não tem nada na nuvem para esse mês, deixa em branco pra você digitar
                         st.session_state.dados_salvos[loja] = {}
                         st.session_state.status_lojas[loja] = "Pendente"
                         
@@ -396,7 +454,6 @@ if uploaded_file is not None:
                 st.sidebar.success(f"Pronto! Valores e progresso recuperados com sucesso.")
                 st.rerun()
 
-    # --- BOTÃO ANTIGO: IMPORTAR (TAMBÉM CORRIGIDO PARA PUXAR NUVEM SE EXISTIR) ---
     if st.sidebar.button("📥 Importar Dados do Excel"):
         if not mes_ref:
             st.sidebar.error("⚠️ Preencha o 'Mês/Ano de Referência' antes de importar!")
@@ -500,8 +557,15 @@ with tab1:
                 for cat in categorias:
                     cid = cat["id"]
                     col_ped, col_fat, col_chk = st.columns([2, 3, 2])
-                    val_ped = str(dados_existentes.get(f"Pedidos {cid}", "0"))
-                    val_fat = str(dados_existentes.get(f"Faturamento {cid}", "0"))
+                    
+                    # Formatação visual segura para a tela (sempre com vírgula!)
+                    ped_val = dados_existentes.get(f"Pedidos {cid}", 0)
+                    val_ped = str(ped_val)
+                    
+                    fat_val = dados_existentes.get(f"Faturamento {cid}", 0.0)
+                    if isinstance(fat_val, float): val_fat = f"{fat_val:.2f}".replace('.', ',')
+                    else: val_fat = str(fat_val)
+                    
                     val_int = dados_existentes.get(f"integra_{cid}", False)
 
                     with col_ped: ped_in = st.text_input(f"Pedidos - {cat['nome']}", value=val_ped, key=f"p_{cid}_{nome_loja}")
@@ -517,14 +581,19 @@ with tab1:
                     st.markdown("**Opções 99Food (La Brasa)**")
                     c99_1, c99_2, c99_3, c99_4 = st.columns([2, 2, 3, 2])
                     
-                    # Puxar marca_99 se existir, senao "Nenhuma"
                     marca_salva = str(dados_existentes.get("marca_99", "Nenhuma"))
                     opcoes_marca = ["Nenhuma", "La Brasa Burger", "Smaxi", "Steak", "F de Frango"]
                     idx_marca = opcoes_marca.index(marca_salva) if marca_salva in opcoes_marca else 0
                     
+                    ped99_val = dados_existentes.get("pedidos_99", 0)
+                    fat99_val = dados_existentes.get("faturamento_99", 0.0)
+                    
+                    val_p99 = str(ped99_val)
+                    val_f99 = f"{fat99_val:.2f}".replace('.', ',') if isinstance(fat99_val, float) else str(fat99_val)
+                    
                     with c99_1: m99 = st.selectbox("Marca 99Food", opcoes_marca, index=idx_marca, key=f"m99_{nome_loja}")
-                    with c99_2: p99 = st.text_input("Pedidos 99", value=str(dados_existentes.get("pedidos_99", "0")), key=f"p99_{nome_loja}")
-                    with c99_3: f99 = st.text_input("Fat. 99 (R$)", value=str(dados_existentes.get("faturamento_99", "0")), key=f"f99_{nome_loja}")
+                    with c99_2: p99 = st.text_input("Pedidos 99", value=val_p99, key=f"p99_{nome_loja}")
+                    with c99_3: f99 = st.text_input("Fat. 99 (R$)", value=val_f99, key=f"f99_{nome_loja}")
                     with c99_4:
                         st.write(""); st.write("")
                         i99 = st.checkbox("Descontar Sistema?", value=dados_existentes.get("integra_99", False), key=f"i99_{nome_loja}")
@@ -533,15 +602,15 @@ with tab1:
                 if st.form_submit_button("💾 Salvar e Enviar p/ Nuvem", type="primary"):
                     dados_loja = {"Mês Referência": mes_ref, "Franquia": nome_loja, "Status": "Preenchida", "fechada": False}
                     id_sistema = [c["id"] for c in categorias if c["is_sistema"]][0]
-                    ped_sis_bruto = int(calcular_expressao(inputs_coletados[id_sistema]["pedidos"]))
-                    fat_sis_bruto = calcular_expressao(inputs_coletados[id_sistema]["fat"])
+                    ped_sis_bruto = calcular_pedidos(inputs_coletados[id_sistema]["pedidos"])
+                    fat_sis_bruto = calcular_faturamento(inputs_coletados[id_sistema]["fat"])
                     desc_fat = 0.0
                     desc_ped = 0
                     
                     for cat in categorias:
                         cid = cat["id"]
-                        p = int(calcular_expressao(inputs_coletados[cid]["pedidos"]))
-                        f = calcular_expressao(inputs_coletados[cid]["fat"])
+                        p = calcular_pedidos(inputs_coletados[cid]["pedidos"])
+                        f = calcular_faturamento(inputs_coletados[cid]["fat"])
                         dados_loja[f"Pedidos {cid}"] = p
                         dados_loja[f"Faturamento {cid}"] = f
                         dados_loja[f"integra_{cid}"] = inputs_coletados[cid]["integra"]
@@ -550,8 +619,8 @@ with tab1:
 
                     if REDES_CONFIG[st.session_state.rede_atual]["usa_99_combo"]:
                         dados_loja["marca_99"] = inputs_99["marca"]
-                        dados_loja["pedidos_99"] = int(calcular_expressao(inputs_99["pedidos"]))
-                        dados_loja["faturamento_99"] = calcular_expressao(inputs_99["fat"])
+                        dados_loja["pedidos_99"] = calcular_pedidos(inputs_99["pedidos"])
+                        dados_loja["faturamento_99"] = calcular_faturamento(inputs_99["fat"])
                         dados_loja["integra_99"] = inputs_99["integra"]
                         if inputs_99["integra"]:
                             desc_fat += dados_loja["faturamento_99"]; desc_ped += dados_loja["pedidos_99"]
@@ -792,13 +861,13 @@ with tab2:
                         tot_fat = 0.0
                         tot_ped = 0
                         for k, v in d.items():
-                            if ("Faturamento" in k or "Pedidos" in k or "Royalties" in k) and isinstance(v, (int, float)):
+                            if k != "fechada" and k != "Franquia":
                                 linha[k] = v
-                                if k.startswith("Faturamento ") and "Sistema" not in k and "Bruto" not in k: tot_fat += v
-                                if k.startswith("Pedidos ") and "Sistema" not in k and "Bruto" not in k: tot_ped += v
+                                if k.startswith("Faturamento ") and "Sistema" not in k and "Bruto" not in k: tot_fat += float(v)
+                                if k.startswith("Pedidos ") and "Sistema" not in k and "Bruto" not in k: tot_ped += int(v)
                         
-                        tot_fat += d.get("Faturamento Sistema", 0.0)
-                        tot_ped += d.get("Pedidos Sistema", 0)
+                        tot_fat += float(d.get("Faturamento Sistema", 0.0))
+                        tot_ped += int(d.get("Pedidos Sistema", 0))
                         
                         linha["Faturamento Total (R$)"] = tot_fat
                         linha["Pedidos Total"] = tot_ped
