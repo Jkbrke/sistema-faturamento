@@ -126,7 +126,6 @@ def enviar_para_nuvem(df_novos, rede):
     df_combined = df_combined.where(pd.notnull(df_combined), "")
     
     # --- MÁGICA DE LOCALIZAÇÃO (ESCUDO BRASIL) ---
-    # Transforma os números em texto com VÍRGULA antes de mandar para o Google
     def converte_br(val):
         try:
             if pd.isna(val) or val == "": return ""
@@ -158,18 +157,25 @@ def carregar_dados_nuvem(rede):
         return pd.DataFrame()
 
 # ==============================================================================
-# OS MOTORES MATEMÁTICOS (CORRIGIDOS)
+# OS MOTORES MATEMÁTICOS (FINALMENTE BLINDADOS CONTRA O EXCEL)
 # ==============================================================================
 
 def calcular_faturamento(expr):
-    """Pega qualquer formato (80.282,57) e extrai o número matemático puro perfeito"""
+    """Regra de Ouro: Pega sempre os últimos 2 dígitos para centavos se não houver formatação explícita"""
     if expr is None or str(expr).strip() == "": return 0.0
     
-    # Se o Excel já leu como número, confia nele
+    # CONVERSÃO SEGURA: Arrancamos a "trava" do Excel. 
+    # Agora se o Excel manda 2769301.0, nós cortamos o .0 e forçamos passar pela regra dos centavos!
     if isinstance(expr, (int, float)):
-        return float(expr)
+        if isinstance(expr, float) and expr.is_integer():
+            expr = str(int(expr)) # Ex: 2769301.0 vira "2769301"
+        elif isinstance(expr, float):
+            expr = f"{expr:.2f}" # Ex: 27693.01 vira "27693.01"
+        else:
+            expr = str(expr)
+    else:
+        expr = str(expr).strip()
         
-    expr = str(expr).strip()
     expr = re.sub(r'[^\d.,\+\-\*/]', '', expr)
     if not expr: return 0.0
     
@@ -183,7 +189,7 @@ def calcular_faturamento(expr):
             p = parte.strip()
             if not p: continue
             
-            # Se já vier com vírgula do Excel/Usuário (Ex: 80.282,57)
+            # Formatos com duas pontuações
             if ',' in p and '.' in p:
                 if p.rfind(',') > p.rfind('.'):
                     p = p.replace('.', '').replace(',', '.')
@@ -194,19 +200,29 @@ def calcular_faturamento(expr):
                 p = p.replace(',', '.')
             # Apenas ponto
             elif '.' in p:
-                if p.count('.') > 1: # Ex: 1.000.000
+                if p.count('.') > 1: # Ex: 2.769.301
                     p = p.replace('.', '')
+                    if len(p) >= 2: p = p[:-2] + '.' + p[-2:]
+                    else: p = str(float(p)/100)
                 else: 
-                    # Avalia se é decimal ou milhar
-                    parts = p.split('.')
-                    if len(parts[1]) != 2 and len(parts[1]) != 1:
-                        # Provável separador de milhar
+                    # Se tiver EXATAMENTE 2 casas após o ponto, a gente confia
+                    if len(p.split('.')[1]) == 2:
+                        pass 
+                    else:
                         p = p.replace('.', '')
+                        if len(p) >= 2: p = p[:-2] + '.' + p[-2:]
+                        else: p = str(float(p)/100)
+            # Sem nada (Ex: 2769301) - Transforma os dois últimos em centavos OBRIGATORIAMENTE
+            else:
+                if len(p) >= 2:
+                    p = p[:-2] + '.' + p[-2:]
+                    if p.startswith('.'): p = '0' + p
+                else:
+                    p = str(float(p)/100)
             expressao_final += p
             
     try: return float(eval(expressao_final))
     except: return 0.0
-
 
 def calcular_pedidos(expr):
     """Protege os pedidos para não virarem centavos!"""
